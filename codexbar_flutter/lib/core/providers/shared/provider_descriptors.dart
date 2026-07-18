@@ -230,7 +230,7 @@ class AllProviderDescriptors {
     displayName: 'Mistral',
     color: 0xFFFF7F00,
     cliName: 'mistral',
-    apiDomain: 'mistral.ai',
+    apiDomain: 'admin.mistral.ai',
   );
 
   static final _augment = _cookieProvider(
@@ -681,6 +681,12 @@ class CookieFetchStrategy extends FetchStrategy {
         return _fetchOpenAI(headers);
       case UsageProvider.cursor:
         return _fetchCursor(headers);
+      case UsageProvider.mistral:
+        return _fetchMistral(headers);
+      case UsageProvider.grok:
+        return _fetchGrok(headers);
+      case UsageProvider.copilot:
+        return _fetchCopilot(headers);
       default:
         return _fetchGeneric(headers);
     }
@@ -1022,6 +1028,102 @@ class CookieFetchStrategy extends FetchStrategy {
 
   Future<ProviderFetchResult> _fetchCursor(Map<String, String> headers) async {
     DebugLogger.log('Cursor', 'Cookie-based fetch not yet implemented, returning cookie snapshot');
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchMistral(Map<String, String> headers) async {
+    // Mistral uses admin.mistral.ai API
+    final endpoints = [
+      'https://admin.mistral.ai/organization/usage',
+      'https://console.mistral.ai/api-ui/trpc/billing.vibeUsage?batch=1&input=%7B%220%22%3A%7B%22json%22%3Anull%2C%22meta%22%3A%7B%22values%22%3A%5B%22undefined%22%5D%2C%22v%22%3A1%7D%7D%7D',
+    ];
+
+    for (final url in endpoints) {
+      DebugLogger.request('Mistral', 'GET', url, headers: headers);
+      try {
+        final response = await http.get(Uri.parse(url), headers: headers);
+        DebugLogger.response('Mistral', url, response.statusCode, response.body, maxLength: 500);
+
+        if (response.statusCode == 200) {
+          final json = _decodeResponse(response.body);
+          if (json != null) {
+            return ProviderFetchResult(
+              usage: _parseGenericUsage(json, provider),
+              sourceLabel: 'web',
+              strategyID: id,
+              strategyKind: kind,
+            );
+          }
+        }
+      } catch (e) {
+        DebugLogger.error('Mistral', 'Request failed ($url)', e);
+      }
+    }
+
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchGrok(Map<String, String> headers) async {
+    // Grok uses grok.com API
+    final url = 'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig';
+    DebugLogger.request('Grok', 'GET', url, headers: headers);
+
+    try {
+      final response = await http.get(Uri.parse(url), headers: headers);
+      DebugLogger.response('Grok', url, response.statusCode, response.body, maxLength: 500);
+
+      if (response.statusCode == 200) {
+        final json = _decodeResponse(response.body);
+        if (json != null) {
+          return ProviderFetchResult(
+            usage: _parseGenericUsage(json, provider),
+            sourceLabel: 'web',
+            strategyID: id,
+            strategyKind: kind,
+          );
+        }
+      }
+    } catch (e) {
+      DebugLogger.error('Grok', 'Request failed', e);
+    }
+
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchCopilot(Map<String, String> headers) async {
+    // Copilot uses GitHub budgets page
+    final url = 'https://github.com/settings/billing/budgets';
+    DebugLogger.request('Copilot', 'GET', url, headers: headers);
+
+    try {
+      final response = await http.get(Uri.parse(url), headers: headers);
+      DebugLogger.response('Copilot', url, response.statusCode, response.body, maxLength: 500);
+
+      // GitHub budgets page returns HTML, need to parse it
+      if (response.statusCode == 200) {
+        // For now, return cookie snapshot
+        // TODO: Parse HTML to extract budget/usage info
+        DebugLogger.log('Copilot', 'Got budgets page, HTML parsing not yet implemented');
+      }
+    } catch (e) {
+      DebugLogger.error('Copilot', 'Request failed', e);
+    }
+
     return ProviderFetchResult(
       usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
       sourceLabel: 'web:cookie',
