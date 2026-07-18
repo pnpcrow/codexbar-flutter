@@ -4,6 +4,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
 import 'core/providers/codex/codex_descriptor.dart';
+import 'core/providers/mimo/mimo_descriptor.dart';
 import 'core/providers/provider_registry.dart';
 import 'core/providers/unified_provider_registry.dart';
 
@@ -44,6 +45,7 @@ void main() async {
 
   // Register dedicated descriptors first (these take priority)
   registry.register(CodexDescriptor.descriptor);
+  registry.register(MiMoDescriptor.descriptor);
   registry.register(ClaudeDescriptor.descriptor);
   registry.register(OpenAIDescriptor.descriptor);
   registry.register(WarpDescriptor.descriptor);

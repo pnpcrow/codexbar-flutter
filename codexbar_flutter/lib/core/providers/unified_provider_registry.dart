@@ -33,6 +33,7 @@ class UnifiedProviderRegistry {
   static bool _hasDedicatedDescriptor(UsageProvider provider) {
     switch (provider) {
       case UsageProvider.codex:
+      case UsageProvider.mimo:
       case UsageProvider.claude:
       case UsageProvider.openai:
       case UsageProvider.minimax:
