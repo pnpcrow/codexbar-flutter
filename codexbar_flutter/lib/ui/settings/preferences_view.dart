@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'general_pane.dart';
 import 'notifications_pane.dart';
@@ -40,17 +40,16 @@ enum SettingsPane {
 }
 
 /// Preferences view - main settings screen.
-/// Direct port of Swift PreferencesView.
-class PreferencesView extends ConsumerStatefulWidget {
+class PreferencesView extends StatefulWidget {
   final VoidCallback onBack;
 
   const PreferencesView({super.key, required this.onBack});
 
   @override
-  ConsumerState<PreferencesView> createState() => _PreferencesViewState();
+  State<PreferencesView> createState() => _PreferencesViewState();
 }
 
-class _PreferencesViewState extends ConsumerState<PreferencesView> {
+class _PreferencesViewState extends State<PreferencesView> {
   SettingsPane _selectedPane = SettingsPane.general;
 
   @override
@@ -58,8 +57,12 @@ class _PreferencesViewState extends ConsumerState<PreferencesView> {
     return Scaffold(
       body: Column(
         children: [
-          // Title bar
-          _buildTitleBar(context),
+          // Draggable title bar
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onPanStart: (_) => windowManager.startDragging(),
+            child: _buildTitleBar(context),
+          ),
 
           // Content
           Expanded(
@@ -67,14 +70,10 @@ class _PreferencesViewState extends ConsumerState<PreferencesView> {
               children: [
                 // Sidebar
                 _buildSidebar(context),
-
                 // Divider
                 VerticalDivider(width: 1, color: Theme.of(context).dividerColor),
-
                 // Pane content
-                Expanded(
-                  child: _buildPaneContent(),
-                ),
+                Expanded(child: _buildPaneContent()),
               ],
             ),
           ),
@@ -118,6 +117,8 @@ class _PreferencesViewState extends ConsumerState<PreferencesView> {
             title: Text(pane.label),
             selected: isSelected,
             dense: true,
+            selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withAlpha(100),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             onTap: () => setState(() => _selectedPane = pane),
           );
         }).toList(),
@@ -141,23 +142,19 @@ class _PreferencesViewState extends ConsumerState<PreferencesView> {
   Widget _buildAboutPane() {
     return Center(
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.monitor_heart, size: 64),
+          Icon(Icons.monitor_heart, size: 64, color: Theme.of(context).colorScheme.primary),
           const SizedBox(height: 16),
-          Text(
-            'CodexBar',
-            style: Theme.of(context).textTheme.headlineMedium,
-          ),
+          Text('CodexBar', style: Theme.of(context).textTheme.headlineMedium),
           const SizedBox(height: 8),
-          Text(
-            'v0.43.1 (build 105)',
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
+          Text('v0.43.1 (build 105)', style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 8),
           Text(
             'AI Provider Usage Monitor',
-            style: Theme.of(context).textTheme.bodySmall,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.outline,
+                ),
           ),
           const SizedBox(height: 24),
           Text(

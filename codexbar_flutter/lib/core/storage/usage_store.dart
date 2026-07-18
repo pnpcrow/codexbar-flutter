@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,7 +14,6 @@ import 'settings_store.dart';
 final _log = Logger('UsageStore');
 
 /// Usage store - manages usage data for all providers.
-/// Direct port of Swift UsageStore.
 class UsageStore {
   final ProviderRegistry _registry;
   final SettingsStore _settings;
@@ -25,8 +24,7 @@ class UsageStore {
   final Map<UsageProvider, DateTime?> _lastFetchTimes = {};
   final Map<UsageProvider, DateTime?> _lastSuccessTimes = {};
 
-  final _snapshotController = StreamController<UsageProvider>.broadcast();
-  final _errorController = StreamController<UsageProvider>.broadcast();
+  final _updateController = StreamController<UsageProvider>.broadcast();
 
   Timer? _refreshTimer;
   bool _isRefreshing = false;
@@ -39,9 +37,8 @@ class UsageStore {
         _settings = settings,
         _prefs = prefs;
 
-  /// Stream of provider updates.
-  Stream<UsageProvider> get onSnapshotUpdated => _snapshotController.stream;
-  Stream<UsageProvider> get onErrorUpdated => _errorController.stream;
+  /// Stream that fires when any provider's data changes.
+  Stream<UsageProvider> get onUpdate => _updateController.stream;
 
   /// Get current snapshot for a provider.
   UsageSnapshot? snapshot(UsageProvider provider) => _snapshots[provider];
@@ -94,7 +91,7 @@ class UsageStore {
     _refreshTimer?.cancel();
     final frequency = _settings.refreshFrequency;
     final duration = frequency.duration;
-    if (duration == null) return; // Manual or adaptive
+    if (duration == null) return;
 
     _refreshTimer = Timer.periodic(duration, (_) {
       refreshAll();
@@ -126,40 +123,29 @@ class UsageStore {
     _lastFetchTimes[provider] = DateTime.now();
 
     try {
-      final context = _buildFetchContext(provider);
+      final context = ProviderFetchContext(
+        sourceMode: _resolveSourceMode(provider),
+        includeCredits: true,
+        env: Map<String, String>.from(Platform.environment),
+      );
       final outcome = await descriptor.fetchOutcome(context);
 
       if (outcome.isSuccess) {
         final result = outcome.result!;
-        final previous = _snapshots[provider];
         _snapshots[provider] = result.usage;
         _errors[provider] = null;
         _lastSuccessTimes[provider] = DateTime.now();
         _cacheSnapshot(provider, result.usage);
-        _snapshotController.add(provider);
-
-        // Check for usage changes (for notifications)
-        if (previous != null && _settings.notifyOnUsageChange) {
-          _checkUsageChange(provider, previous, result.usage);
-        }
+        _updateController.add(provider);
       } else {
         _errors[provider] = outcome.error.toString();
-        _errorController.add(provider);
+        _updateController.add(provider);
       }
     } catch (e) {
       _errors[provider] = e.toString();
-      _errorController.add(provider);
+      _updateController.add(provider);
       _log.severe('Failed to refresh ${provider.name}: $e');
     }
-  }
-
-  /// Build fetch context for a provider.
-  ProviderFetchContext _buildFetchContext(UsageProvider provider) {
-    return ProviderFetchContext(
-      sourceMode: _resolveSourceMode(provider),
-      includeCredits: true,
-      env: {}, // TODO: Pass environment
-    );
   }
 
   /// Resolve source mode for a provider from settings.
@@ -169,42 +155,9 @@ class UsageStore {
     return ProviderSourceMode.values.byName(mode);
   }
 
-  /// Check for usage changes and trigger notifications.
-  void _checkUsageChange(
-    UsageProvider provider,
-    UsageSnapshot previous,
-    UsageSnapshot current,
-  ) {
-    final prevPercent = previous.primary?.usedPercent;
-    final currPercent = current.primary?.usedPercent;
-
-    if (prevPercent != null && currPercent != null && prevPercent != currPercent) {
-      // Usage changed - notification will be handled by NotificationService
-      _log.info('Usage changed for ${provider.name}: $prevPercent% → $currPercent%');
-    }
-  }
-
   /// Dispose resources.
   void dispose() {
     _refreshTimer?.cancel();
-    _snapshotController.close();
-    _errorController.close();
+    _updateController.close();
   }
 }
-
-/// Riverpod provider for usage store.
-final usageStoreProvider = FutureProvider<UsageStore>((ref) async {
-  final registry = ref.watch(providerRegistryProvider);
-  final settings = await ref.watch(settingsStoreProvider.future);
-  final prefs = await SharedPreferences.getInstance();
-
-  final store = UsageStore(
-    registry: registry,
-    settings: settings,
-    prefs: prefs,
-  );
-  await store.initialize();
-
-  ref.onDispose(() => store.dispose());
-  return store;
-});

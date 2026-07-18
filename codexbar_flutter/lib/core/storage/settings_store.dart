@@ -1,4 +1,3 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/usage_provider.dart';
@@ -209,9 +208,3 @@ class SettingsStore {
     }
   }
 }
-
-/// Riverpod provider for settings store.
-final settingsStoreProvider = FutureProvider<SettingsStore>((ref) async {
-  final prefs = await SharedPreferences.getInstance();
-  return SettingsStore(prefs);
-});

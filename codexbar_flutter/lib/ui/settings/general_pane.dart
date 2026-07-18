@@ -1,15 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/providers/app_providers.dart';
 import '../../core/storage/settings_store.dart';
 
 /// General settings pane.
-/// Direct port of Swift PreferencesGeneralPane.
-class GeneralPane extends ConsumerWidget {
+class GeneralPane extends ConsumerStatefulWidget {
   const GeneralPane({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<GeneralPane> createState() => _GeneralPaneState();
+}
+
+class _GeneralPaneState extends ConsumerState<GeneralPane> {
+  @override
+  Widget build(BuildContext context) {
     final settingsAsync = ref.watch(settingsStoreProvider);
 
     return settingsAsync.when(
@@ -23,7 +28,6 @@ class GeneralPane extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // Refresh Frequency
         _buildSection(context, 'Refresh', [
           _buildDropdown<RefreshFrequency>(
             context,
@@ -32,35 +36,29 @@ class GeneralPane extends ConsumerWidget {
             items: RefreshFrequency.values,
             itemLabel: (f) => f.label,
             onChanged: (value) {
-              settings.refreshFrequency = value;
+              setState(() => settings.refreshFrequency = value);
             },
           ),
         ]),
-
         const SizedBox(height: 24),
-
-        // System
         _buildSection(context, 'System', [
           _buildSwitch(
             context,
             label: 'Launch at Login',
             value: settings.launchAtLogin,
             onChanged: (value) {
-              settings.launchAtLogin = value;
+              setState(() => settings.launchAtLogin = value);
             },
           ),
         ]),
-
         const SizedBox(height: 24),
-
-        // Menu Bar
         _buildSection(context, 'Menu Bar', [
           _buildSwitch(
             context,
             label: 'Show Menu Bar Icon',
             value: settings.showMenuBarIcon,
             onChanged: (value) {
-              settings.showMenuBarIcon = value;
+              setState(() => settings.showMenuBarIcon = value);
             },
           ),
           _buildSwitch(
@@ -68,7 +66,7 @@ class GeneralPane extends ConsumerWidget {
             label: 'Show Usage Percentage',
             value: settings.showUsagePercentage,
             onChanged: (value) {
-              settings.showUsagePercentage = value;
+              setState(() => settings.showUsagePercentage = value);
             },
           ),
         ]),
@@ -84,6 +82,7 @@ class GeneralPane extends ConsumerWidget {
           title,
           style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w600,
               ),
         ),
         const SizedBox(height: 8),
@@ -98,15 +97,12 @@ class GeneralPane extends ConsumerWidget {
     required bool value,
     required ValueChanged<bool> onChanged,
   }) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label),
-        Switch(
-          value: value,
-          onChanged: onChanged,
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [Text(label), Switch(value: value, onChanged: onChanged)],
+      ),
     );
   }
 
@@ -118,23 +114,23 @@ class GeneralPane extends ConsumerWidget {
     required String Function(T) itemLabel,
     required ValueChanged<T> onChanged,
   }) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label),
-        DropdownButton<T>(
-          value: value,
-          items: items.map((item) {
-            return DropdownMenuItem(
-              value: item,
-              child: Text(itemLabel(item)),
-            );
-          }).toList(),
-          onChanged: (newValue) {
-            if (newValue != null) onChanged(newValue);
-          },
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label),
+          DropdownButton<T>(
+            value: value,
+            items: items.map((item) {
+              return DropdownMenuItem(value: item, child: Text(itemLabel(item)));
+            }).toList(),
+            onChanged: (newValue) {
+              if (newValue != null) onChanged(newValue);
+            },
+          ),
+        ],
+      ),
     );
   }
 }

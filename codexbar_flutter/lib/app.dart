@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'ui/menu/menu_card_view.dart';
 import 'ui/settings/preferences_view.dart';
 import 'ui/tray/tray_manager.dart';
 
 /// Main application widget.
-/// Direct port of Swift CodexBarApp.
 class CodexBarApp extends ConsumerStatefulWidget {
   const CodexBarApp({super.key});
 
@@ -17,6 +17,7 @@ class CodexBarApp extends ConsumerStatefulWidget {
 class _CodexBarAppState extends ConsumerState<CodexBarApp> {
   final TrayManager _trayManager = TrayManager();
   bool _showSettings = false;
+  bool _trayInitialized = false;
 
   @override
   void initState() {
@@ -25,14 +26,23 @@ class _CodexBarAppState extends ConsumerState<CodexBarApp> {
   }
 
   Future<void> _initializeTray() async {
-    await _trayManager.initialize(
-      onShowWindow: () => _trayManager.showWindow(),
-      onHideWindow: () => _trayManager.hideWindow(),
-      onQuit: () {
-        _trayManager.dispose();
-        // Exit the app
-      },
-    );
+    if (_trayInitialized) return;
+    try {
+      await _trayManager.initialize(
+        onShowWindow: () async {
+          await windowManager.show();
+          await windowManager.focus();
+        },
+        onHideWindow: () async {
+          await windowManager.hide();
+        },
+        onQuit: () async {
+          _trayManager.dispose();
+          await windowManager.destroy();
+        },
+      );
+      _trayInitialized = true;
+    } catch (_) {}
   }
 
   @override
@@ -48,17 +58,31 @@ class _CodexBarAppState extends ConsumerState<CodexBarApp> {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blueGrey,
+          seedColor: const Color(0xFF607D8B), // blueGrey
           brightness: Brightness.light,
         ),
         useMaterial3: true,
+        cardTheme: CardThemeData(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: Colors.grey.shade300),
+          ),
+        ),
       ),
       darkTheme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blueGrey,
+          seedColor: const Color(0xFF607D8B),
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
+        cardTheme: CardThemeData(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: Colors.grey.shade700),
+          ),
+        ),
       ),
       themeMode: ThemeMode.system,
       home: _showSettings

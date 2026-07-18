@@ -2,43 +2,59 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/usage_provider.dart';
+import '../../core/providers/app_providers.dart';
 import '../../core/storage/settings_store.dart';
 
 /// Providers settings pane.
-/// Direct port of Swift PreferencesProvidersPane.
-class ProvidersPane extends ConsumerWidget {
+class ProvidersPane extends ConsumerStatefulWidget {
   const ProvidersPane({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProvidersPane> createState() => _ProvidersPaneState();
+}
+
+class _ProvidersPaneState extends ConsumerState<ProvidersPane> {
+  String _searchQuery = '';
+
+  @override
+  Widget build(BuildContext context) {
     final settingsAsync = ref.watch(settingsStoreProvider);
+    final enabledAsync = ref.watch(enabledProvidersProvider);
 
     return settingsAsync.when(
-      data: (settings) => _buildContent(context, ref, settings),
+      data: (settings) {
+        return enabledAsync.when(
+          data: (enabled) => _buildContent(context, settings, enabled),
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('Error: $e')),
+        );
+      },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('Error: $e')),
     );
   }
 
-  Widget _buildContent(BuildContext context, WidgetRef ref, SettingsStore settings) {
-    final enabledProviders = settings.enabledProviders;
+  Widget _buildContent(
+    BuildContext context,
+    SettingsStore settings,
+    Set<UsageProvider> enabled,
+  ) {
+    final filtered = UsageProvider.values.where((p) {
+      if (_searchQuery.isEmpty) return true;
+      return p.displayName.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          p.name.toLowerCase().contains(_searchQuery.toLowerCase());
+    }).toList();
 
     return Column(
       children: [
         // Header
-        Container(
-          padding: const EdgeInsets.all(16),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
           child: Row(
             children: [
-              Text(
-                'Providers',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+              Text('Providers', style: Theme.of(context).textTheme.titleMedium),
               const Spacer(),
-              Text(
-                '${enabledProviders.length} enabled',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+              Text('${enabled.length} enabled', style: Theme.of(context).textTheme.bodySmall),
             ],
           ),
         ),
@@ -50,11 +66,11 @@ class ProvidersPane extends ConsumerWidget {
             decoration: InputDecoration(
               hintText: 'Search providers...',
               prefixIcon: const Icon(Icons.search, size: 20),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              isDense: true,
             ),
+            onChanged: (v) => setState(() => _searchQuery = v),
           ),
         ),
 
@@ -63,64 +79,54 @@ class ProvidersPane extends ConsumerWidget {
         // Provider list
         Expanded(
           child: ListView.builder(
-            itemCount: UsageProvider.values.length,
+            itemCount: filtered.length,
             itemBuilder: (context, index) {
-              final provider = UsageProvider.values[index];
-              final isEnabled = enabledProviders.contains(provider);
+              final provider = filtered[index];
+              final isEnabled = enabled.contains(provider);
 
-              return _ProviderTile(
-                provider: provider,
-                isEnabled: isEnabled,
-                onToggle: (value) {
+              return ListTile(
+                dense: true,
+                leading: Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(6),
+                    color: isEnabled
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : Theme.of(context).colorScheme.surfaceContainerHighest,
+                  ),
+                  child: Center(
+                    child: Text(
+                      provider.displayName[0],
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: isEnabled
+                            ? Theme.of(context).colorScheme.onPrimaryContainer
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+                title: Text(provider.displayName),
+                subtitle: Text(provider.cliName, style: const TextStyle(fontSize: 12)),
+                trailing: Switch(
+                  value: isEnabled,
+                  onChanged: (value) async {
+                    settings.toggleProvider(provider);
+                    // Refresh the enabled providers provider
+                    ref.invalidate(enabledProvidersProvider);
+                  },
+                ),
+                onTap: () async {
                   settings.toggleProvider(provider);
+                  ref.invalidate(enabledProvidersProvider);
                 },
               );
             },
           ),
         ),
       ],
-    );
-  }
-}
-
-class _ProviderTile extends StatelessWidget {
-  final UsageProvider provider;
-  final bool isEnabled;
-  final ValueChanged<bool> onToggle;
-
-  const _ProviderTile({
-    required this.provider,
-    required this.isEnabled,
-    required this.onToggle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          color: isEnabled
-              ? Theme.of(context).colorScheme.primaryContainer
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
-        ),
-        child: Icon(
-          Icons.api,
-          size: 18,
-          color: isEnabled
-              ? Theme.of(context).colorScheme.onPrimaryContainer
-              : Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
-      title: Text(provider.displayName),
-      subtitle: Text(provider.cliName),
-      trailing: Switch(
-        value: isEnabled,
-        onChanged: onToggle,
-      ),
-      onTap: () => onToggle(!isEnabled),
     );
   }
 }

@@ -1,5 +1,3 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import '../models/provider_metadata.dart';
 import '../models/usage_provider.dart';
 import 'provider_descriptor.dart';
@@ -38,21 +36,3 @@ class ProviderRegistry {
     return map;
   }
 }
-
-/// Riverpod provider for the registry.
-final providerRegistryProvider = Provider<ProviderRegistry>((ref) {
-  return ProviderRegistry();
-});
-
-/// Riverpod provider for enabled providers.
-final enabledProvidersProvider = StateProvider<Set<UsageProvider>>((ref) {
-  // Default enabled providers
-  return {
-    UsageProvider.codex,
-    UsageProvider.claude,
-    UsageProvider.openai,
-    UsageProvider.cursor,
-    UsageProvider.gemini,
-    UsageProvider.copilot,
-  };
-});

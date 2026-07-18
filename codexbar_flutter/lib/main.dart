@@ -3,6 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
+import 'core/providers/provider_registry.dart';
+import 'core/providers/shared/provider_descriptors.dart';
+
+// Provider descriptors
 import 'core/providers/alibaba/alibaba_descriptor.dart';
 import 'core/providers/amp/amp_descriptor.dart';
 import 'core/providers/claude/claude_descriptor.dart';
@@ -24,8 +28,6 @@ import 'core/providers/openai/openai_descriptor.dart';
 import 'core/providers/openrouter/openrouter_descriptor.dart';
 import 'core/providers/perplexity/perplexity_descriptor.dart';
 import 'core/providers/poe/poe_descriptor.dart';
-import 'core/providers/provider_registry.dart';
-import 'core/providers/shared/provider_descriptors.dart';
 import 'core/providers/stepfun/stepfun_descriptor.dart';
 import 'core/providers/synthetic/synthetic_descriptor.dart';
 import 'core/providers/venice/venice_descriptor.dart';
@@ -73,8 +75,8 @@ void main() async {
   await windowManager.ensureInitialized();
 
   const windowOptions = WindowOptions(
-    size: Size(400, 600),
-    minimumSize: Size(350, 500),
+    size: Size(420, 640),
+    minimumSize: Size(360, 480),
     center: true,
     backgroundColor: Colors.transparent,
     titleBarStyle: TitleBarStyle.hidden,

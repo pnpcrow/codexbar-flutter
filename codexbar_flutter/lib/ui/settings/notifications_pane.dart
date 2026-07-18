@@ -1,15 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/providers/app_providers.dart';
 import '../../core/storage/settings_store.dart';
 
 /// Notifications settings pane.
-/// Direct port of Swift PreferencesNotificationsPane.
-class NotificationsPane extends ConsumerWidget {
+class NotificationsPane extends ConsumerStatefulWidget {
   const NotificationsPane({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<NotificationsPane> createState() => _NotificationsPaneState();
+}
+
+class _NotificationsPaneState extends ConsumerState<NotificationsPane> {
+  @override
+  Widget build(BuildContext context) {
     final settingsAsync = ref.watch(settingsStoreProvider);
 
     return settingsAsync.when(
@@ -23,21 +28,17 @@ class NotificationsPane extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // General
         _buildSection(context, 'General', [
           _buildSwitch(
             context,
             label: 'Enable Notifications',
             value: settings.notificationsEnabled,
             onChanged: (value) {
-              settings.notificationsEnabled = value;
+              setState(() => settings.notificationsEnabled = value);
             },
           ),
         ]),
-
         const SizedBox(height: 24),
-
-        // Usage Notifications
         _buildSection(context, 'Usage Notifications', [
           _buildSwitch(
             context,
@@ -45,7 +46,7 @@ class NotificationsPane extends ConsumerWidget {
             subtitle: 'Get notified when provider usage changes',
             value: settings.notifyOnUsageChange,
             onChanged: (value) {
-              settings.notifyOnUsageChange = value;
+              setState(() => settings.notifyOnUsageChange = value);
             },
           ),
           _buildSwitch(
@@ -54,31 +55,26 @@ class NotificationsPane extends ConsumerWidget {
             subtitle: 'Get notified when session/weekly limits reset',
             value: settings.notifyOnLimitReset,
             onChanged: (value) {
-              settings.notifyOnLimitReset = value;
+              setState(() => settings.notifyOnLimitReset = value);
             },
           ),
         ]),
-
         const SizedBox(height: 24),
-
-        // Visual Effects
         _buildSection(context, 'Visual Effects', [
           _buildSwitch(
             context,
             label: 'Confetti on Session Reset',
-            subtitle: 'Show confetti when session limits reset',
             value: settings.confettiOnSessionLimitResets,
             onChanged: (value) {
-              settings.confettiOnSessionLimitResets = value;
+              setState(() => settings.confettiOnSessionLimitResets = value);
             },
           ),
           _buildSwitch(
             context,
             label: 'Confetti on Weekly Reset',
-            subtitle: 'Show confetti when weekly limits reset',
             value: settings.confettiOnWeeklyLimitResets,
             onChanged: (value) {
-              settings.confettiOnWeeklyLimitResets = value;
+              setState(() => settings.confettiOnWeeklyLimitResets = value);
             },
           ),
         ]),
@@ -94,6 +90,7 @@ class NotificationsPane extends ConsumerWidget {
           title,
           style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w600,
               ),
         ),
         const SizedBox(height: 8),
@@ -109,29 +106,29 @@ class NotificationsPane extends ConsumerWidget {
     required bool value,
     required ValueChanged<bool> onChanged,
   }) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label),
-              if (subtitle != null)
-                Text(
-                  subtitle,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
-                      ),
-                ),
-            ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label),
+                if (subtitle != null)
+                  Text(
+                    subtitle,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                  ),
+              ],
+            ),
           ),
-        ),
-        Switch(
-          value: value,
-          onChanged: onChanged,
-        ),
-      ],
+          Switch(value: value, onChanged: onChanged),
+        ],
+      ),
     );
   }
 }

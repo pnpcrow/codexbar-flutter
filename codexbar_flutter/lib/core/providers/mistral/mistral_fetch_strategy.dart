@@ -45,17 +45,13 @@ class MistralWebFetchStrategy extends FetchStrategy {
       throw Exception('Unauthorized - sign in to admin.mistral.ai');
     }
 
-    double? walletAmount;
-    double? creditNotesAmount;
-    double? ongoingUsageBalance;
-
     if (creditsResponse.statusCode == 200) {
       final creditsJson =
           jsonDecode(creditsResponse.body) as Map<String, dynamic>;
-      walletAmount = (creditsJson['walletAmount'] as num?)?.toDouble();
-      creditNotesAmount = (creditsJson['creditNotesAmount'] as num?)?.toDouble();
-      ongoingUsageBalance =
-          (creditsJson['ongoingUsageBalance'] as num?)?.toDouble();
+      // Wallet and credit info available but not currently displayed
+      creditsJson['walletAmount'];
+      creditsJson['creditNotesAmount'];
+      creditsJson['ongoingUsageBalance'];
     }
 
     // Fetch vibe usage
