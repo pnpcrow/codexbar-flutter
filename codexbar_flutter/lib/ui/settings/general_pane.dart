@@ -101,7 +101,10 @@ class _GeneralPaneState extends ConsumerState<GeneralPane> {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [Text(label), Switch(value: value, onChanged: onChanged)],
+        children: [
+          Flexible(child: Text(label)),
+          Switch(value: value, onChanged: onChanged),
+        ],
       ),
     );
   }
@@ -119,7 +122,8 @@ class _GeneralPaneState extends ConsumerState<GeneralPane> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label),
+          Flexible(child: Text(label)),
+          const SizedBox(width: 8),
           DropdownButton<T>(
             value: value,
             items: items.map((item) {

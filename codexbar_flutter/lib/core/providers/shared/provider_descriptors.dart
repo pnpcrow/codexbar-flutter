@@ -617,39 +617,64 @@ class _GenericCookieStrategy extends FetchStrategy {
 
   @override
   Future<bool> isAvailable(ProviderFetchContext context) async {
+    // Check for manually configured cookie first
+    final env = context.env.isEmpty ? Platform.environment : context.env;
+    final manualCookie = env['${provider.name.toUpperCase()}_COOKIE'];
+    if (manualCookie != null && manualCookie.trim().isNotEmpty) return true;
+
+    // Try browser cookie resolver
     final resolver = BrowserCookieResolver();
     return await resolver.hasPlausibleSession(provider);
   }
 
   @override
   Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
-    final resolver = BrowserCookieResolver();
-    final cookies = await resolver.resolve(provider);
-    if (cookies == null) {
+    // Try manually configured cookie from environment
+    final env = context.env.isEmpty ? Platform.environment : context.env;
+    String? cookieHeader = env['${provider.name.toUpperCase()}_COOKIE'];
+
+    // If no manual cookie, try browser resolver
+    if (cookieHeader == null || cookieHeader.trim().isNotEmpty == false) {
+      final resolver = BrowserCookieResolver();
+      final cookies = await resolver.resolve(provider);
+      cookieHeader = cookies?.cookieHeader;
+    }
+
+    if (cookieHeader == null || cookieHeader.trim().isEmpty) {
       throw Exception('No cookies found for ${provider.displayName}');
     }
 
-    // Try to fetch usage from provider's web API
-    try {
-      final response = await http.get(
-        Uri.parse('https://$apiDomain/api/usage'),
-        headers: {'Cookie': cookies.cookieHeader},
-      );
+    final headers = {'Cookie': cookieHeader};
 
-      if (response.statusCode == 200) {
-        return ProviderFetchResult(
-          usage: makeSimpleSnapshot(provider: provider),
-          sourceLabel: 'web',
-          strategyID: id,
-          strategyKind: kind,
-        );
-      }
-    } catch (_) {}
+    // Try common API endpoints
+    final endpoints = [
+      'https://$apiDomain/api/usage',
+      'https://$apiDomain/api/user/usage',
+      'https://$apiDomain/api/v1/usage',
+      'https://$apiDomain/api/account/usage',
+    ];
 
-    // Return empty snapshot if fetch fails
+    for (final endpoint in endpoints) {
+      try {
+        final response = await http.get(Uri.parse(endpoint), headers: headers);
+        if (response.statusCode == 200) {
+          return ProviderFetchResult(
+            usage: makeSimpleSnapshot(provider: provider),
+            sourceLabel: 'web',
+            strategyID: id,
+            strategyKind: kind,
+          );
+        }
+      } catch (_) {}
+    }
+
+    // Even if API calls fail, return a snapshot with cookie info
     return ProviderFetchResult(
-      usage: makeSimpleSnapshot(provider: provider),
-      sourceLabel: 'web:placeholder',
+      usage: makeSimpleSnapshot(
+        provider: provider,
+        loginMethod: 'cookie (API endpoint not available)',
+      ),
+      sourceLabel: 'web:cookie-only',
       strategyID: id,
       strategyKind: kind,
     );
