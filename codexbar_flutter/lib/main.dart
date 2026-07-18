@@ -11,6 +11,7 @@ import 'core/providers/alibaba/alibaba_descriptor.dart';
 import 'core/providers/amp/amp_descriptor.dart';
 import 'core/providers/claude/claude_descriptor.dart';
 import 'core/providers/clawrouter/clawrouter_descriptor.dart';
+import 'core/providers/codex/codex_descriptor.dart';
 import 'core/providers/crof/crof_descriptor.dart';
 import 'core/providers/crossmodel/crossmodel_descriptor.dart';
 import 'core/providers/deepgram/deepgram_descriptor.dart';
@@ -39,6 +40,7 @@ void main() async {
 
   // Register all providers
   final registry = ProviderRegistry();
+  registry.register(CodexDescriptor.descriptor);
   registry.register(ClaudeDescriptor.descriptor);
   registry.register(OpenAIDescriptor.descriptor);
   registry.register(WarpDescriptor.descriptor);

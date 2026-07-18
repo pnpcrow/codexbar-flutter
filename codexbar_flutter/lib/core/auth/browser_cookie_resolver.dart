@@ -73,7 +73,7 @@ class BrowserCookieResolver {
   /// Key cookie names per provider (essential session/auth cookies).
   static List<String> keyCookieNames(UsageProvider provider) {
     switch (provider) {
-      case UsageProvider.mimo: return ['serviceToken', 'userId'];
+      case UsageProvider.mimo: return ['api-platform_serviceToken', 'serviceToken', 'userId'];
       case UsageProvider.minimax: return ['_token'];
       case UsageProvider.zai: return ['token'];
       case UsageProvider.claude: return ['sessionKey', '__cf_bm'];

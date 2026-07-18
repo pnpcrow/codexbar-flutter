@@ -1,8 +1,12 @@
+import 'dart:io';
+
+import '../../auth/browser_cookie_resolver.dart';
 import '../../models/provider_branding.dart';
 import '../../models/provider_metadata.dart';
 import '../../models/usage_provider.dart';
 import '../fetch_strategy.dart';
 import '../provider_descriptor.dart';
+import '../shared/provider_descriptors.dart';
 import 'zai_fetch_strategy.dart';
 
 class ZaiDescriptor {
@@ -38,10 +42,19 @@ class ZaiDescriptor {
     ProviderFetchContext context,
   ) async {
     final strategies = <FetchStrategy>[];
+
+    // 1. API token strategy (if ZAI_API_TOKEN is set)
     final api = ZaiAPIFetchStrategy();
     if (await api.isAvailable(context)) {
       strategies.add(api);
     }
+
+    // 2. Cookie strategy (always available as fallback)
+    strategies.add(CookieFetchStrategy(
+      provider: UsageProvider.zai,
+      apiDomain: 'api.z.ai',
+    ));
+
     return strategies;
   }
 }

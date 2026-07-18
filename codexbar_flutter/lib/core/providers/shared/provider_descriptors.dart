@@ -550,7 +550,7 @@ class AllProviderDescriptors {
         resolveStrategies: (context) async {
           final strategies = <FetchStrategy>[];
           // Cookie strategy (always add - it tries DB, CDP, and manual cookies)
-          strategies.add(_GenericCookieStrategy(
+          strategies.add(CookieFetchStrategy(
             provider: id,
             apiDomain: apiDomain,
           ));
@@ -606,11 +606,12 @@ class AllProviderDescriptors {
 }
 
 /// Generic cookie-based fetch strategy with provider-specific API endpoints.
-class _GenericCookieStrategy extends FetchStrategy {
+/// Exported for use by dedicated provider descriptors.
+class CookieFetchStrategy extends FetchStrategy {
   final UsageProvider provider;
   final String apiDomain;
 
-  _GenericCookieStrategy({required this.provider, required this.apiDomain});
+  CookieFetchStrategy({required this.provider, required this.apiDomain});
 
   @override
   String get id => '${provider.name}.web';
@@ -686,34 +687,47 @@ class _GenericCookieStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchMiMo(Map<String, String> headers) async {
-    const url = 'https://platform.xiaomimimo.com/api/user/usage';
-    DebugLogger.request('MiMo', 'GET', url, headers: headers);
+    final baseUrl = 'https://platform.xiaomimimo.com/api/v1';
+    final endpoints = [
+      '$baseUrl/balance',
+      '$baseUrl/tokenPlan/detail',
+      '$baseUrl/tokenPlan/usage',
+    ];
 
-    try {
-      final response = await http.get(Uri.parse(url), headers: headers);
-      DebugLogger.response('MiMo', url, response.statusCode, response.body);
+    Map<String, dynamic>? lastJson;
+    for (final url in endpoints) {
+      DebugLogger.request('MiMo', 'GET', url, headers: headers);
+      try {
+        final response = await http.get(Uri.parse(url), headers: headers);
+        DebugLogger.response('MiMo', url, response.statusCode, response.body);
 
-      if (response.statusCode == 200) {
-        final json = _decodeResponse(response.body);
-        if (json != null) {
-          DebugLogger.log('MiMo', 'Parsing usage response...');
-          return ProviderFetchResult(
-            usage: _parseGenericUsage(json, provider),
-            sourceLabel: 'web',
-            strategyID: id,
-            strategyKind: kind,
-          );
-        } else {
-          DebugLogger.error('MiMo', 'Failed to decode response body');
+        if (response.statusCode == 200) {
+          final json = _decodeResponse(response.body);
+          if (json != null) {
+            lastJson = json;
+            DebugLogger.log('MiMo', 'Got data from $url');
+          }
+        } else if (response.statusCode == 401 || response.statusCode == 403) {
+          DebugLogger.error('MiMo', 'Auth failed ($url): ${response.statusCode}');
+          throw Exception('MiMo session expired. Log in at platform.xiaomimimo.com');
         }
-      } else {
-        DebugLogger.error('MiMo', 'HTTP ${response.statusCode}');
+      } catch (e) {
+        if (e is Exception && e.toString().contains('session expired')) rethrow;
+        DebugLogger.error('MiMo', 'Request failed ($url)', e);
       }
-    } catch (e) {
-      DebugLogger.error('MiMo', 'Request failed', e);
     }
 
-    DebugLogger.log('MiMo', 'Returning cookie-only snapshot');
+    if (lastJson != null) {
+      DebugLogger.log('MiMo', 'Parsing usage from response');
+      return ProviderFetchResult(
+        usage: _parseGenericUsage(lastJson, provider),
+        sourceLabel: 'web',
+        strategyID: id,
+        strategyKind: kind,
+      );
+    }
+
+    DebugLogger.log('MiMo', 'No valid API response, returning cookie snapshot');
     return ProviderFetchResult(
       usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
       sourceLabel: 'web:cookie',
