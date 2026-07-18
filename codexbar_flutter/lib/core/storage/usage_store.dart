@@ -2,16 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:logging/logging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../debug/debug_logger.dart';
 import '../models/usage_provider.dart';
 import '../models/usage_snapshot.dart';
 import '../providers/fetch_strategy.dart';
 import '../providers/provider_registry.dart';
 import 'settings_store.dart';
-
-final _log = Logger('UsageStore');
 
 /// Usage store - manages usage data for all providers.
 class UsageStore {
@@ -70,7 +68,7 @@ class UsageStore {
           final json = jsonDecode(cached) as Map<String, dynamic>;
           _snapshots[provider] = UsageSnapshot.fromJson(json);
         } catch (e) {
-          _log.warning('Failed to load cached snapshot for ${provider.name}: $e');
+          DebugLogger.error('UsageStore', 'Failed to load cached snapshot for ${provider.name}', e);
         }
       }
     }
@@ -82,7 +80,7 @@ class UsageStore {
       final json = jsonEncode(snapshot.toJson());
       _prefs.setString('usage_${provider.name}', json);
     } catch (e) {
-      _log.warning('Failed to cache snapshot for ${provider.name}: $e');
+      DebugLogger.error('UsageStore', 'Failed to cache snapshot for ${provider.name}', e);
     }
   }
 
@@ -116,10 +114,11 @@ class UsageStore {
   Future<void> refreshProvider(UsageProvider provider) async {
     final descriptor = _registry.descriptorFor(provider);
     if (descriptor == null) {
-      _log.warning('No descriptor for ${provider.name}');
+      DebugLogger.error('UsageStore', 'No descriptor for ${provider.name}');
       return;
     }
 
+    DebugLogger.log('UsageStore', 'Refreshing ${provider.displayName}...');
     _lastFetchTimes[provider] = DateTime.now();
 
     try {
@@ -128,6 +127,8 @@ class UsageStore {
         includeCredits: true,
         env: Map<String, String>.from(Platform.environment),
       );
+      DebugLogger.log('UsageStore', '  Source mode: ${context.sourceMode}');
+
       final outcome = await descriptor.fetchOutcome(context);
 
       if (outcome.isSuccess) {
@@ -137,14 +138,26 @@ class UsageStore {
         _lastSuccessTimes[provider] = DateTime.now();
         _cacheSnapshot(provider, result.usage);
         _updateController.add(provider);
+
+        DebugLogger.log('UsageStore', '  ${provider.displayName} SUCCESS (${result.sourceLabel})');
+        if (result.usage.primary != null) {
+          DebugLogger.log('UsageStore', '    Session: ${result.usage.primary!.usedPercent.toStringAsFixed(1)}%');
+        }
+        if (result.usage.secondary != null) {
+          DebugLogger.log('UsageStore', '    Weekly: ${result.usage.secondary!.usedPercent.toStringAsFixed(1)}%');
+        }
+        if (result.usage.identity?.accountEmail != null) {
+          DebugLogger.log('UsageStore', '    Email: ${result.usage.identity!.accountEmail}');
+        }
       } else {
         _errors[provider] = outcome.error.toString();
         _updateController.add(provider);
+        DebugLogger.error('UsageStore', '${provider.displayName} FAILED: ${outcome.error}');
       }
     } catch (e) {
       _errors[provider] = e.toString();
       _updateController.add(provider);
-      _log.severe('Failed to refresh ${provider.name}: $e');
+      DebugLogger.error('UsageStore', '${provider.displayName} EXCEPTION', e);
     }
   }
 

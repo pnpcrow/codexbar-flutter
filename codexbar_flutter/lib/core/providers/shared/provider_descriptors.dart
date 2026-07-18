@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../../auth/browser_cookie_resolver.dart';
+import '../../debug/debug_logger.dart';
 import '../../models/fetch_kind.dart';
 import '../../models/fetch_result.dart';
 import '../../models/provider_branding.dart';
@@ -624,6 +625,7 @@ class _GenericCookieStrategy extends FetchStrategy {
 
   @override
   Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
+    DebugLogger.log('FetchStrategy', '${provider.displayName} fetch() started');
     final env = context.env.isEmpty ? Platform.environment : context.env;
     String? cookieHeader;
 
@@ -631,16 +633,22 @@ class _GenericCookieStrategy extends FetchStrategy {
     final manualCookie = env['${provider.name.toUpperCase()}_COOKIE'];
     if (manualCookie != null && manualCookie.trim().isNotEmpty) {
       cookieHeader = manualCookie.trim();
+      DebugLogger.log('FetchStrategy', '  Using manual cookie from env');
     }
 
     // 2. Try browser cookie resolver (sequential browser check)
     if (cookieHeader == null || cookieHeader.isEmpty) {
+      DebugLogger.log('FetchStrategy', '  Trying browser cookie resolver...');
       final resolver = BrowserCookieResolver();
       final cookies = await resolver.resolve(provider);
       cookieHeader = cookies?.cookieHeader;
+      if (cookies != null) {
+        DebugLogger.log('FetchStrategy', '  Got cookies from ${cookies.browser.displayName}');
+      }
     }
 
     if (cookieHeader == null || cookieHeader.isEmpty) {
+      DebugLogger.error('FetchStrategy', 'No cookies found for ${provider.displayName}');
       throw Exception(
         'No cookies found for ${provider.displayName}. '
         'Open the provider website in your browser and sign in.',
@@ -648,6 +656,7 @@ class _GenericCookieStrategy extends FetchStrategy {
     }
 
     // 3. Try provider-specific API endpoints
+    DebugLogger.log('FetchStrategy', '  Calling provider-specific API...');
     return await _fetchWithCookies(cookieHeader);
   }
 
@@ -677,26 +686,34 @@ class _GenericCookieStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchMiMo(Map<String, String> headers) async {
-    // MiMo usage API
+    const url = 'https://platform.xiaomimimo.com/api/user/usage';
+    DebugLogger.request('MiMo', 'GET', url, headers: headers);
+
     try {
-      final response = await http.get(
-        Uri.parse('https://platform.xiaomimimo.com/api/user/usage'),
-        headers: headers,
-      );
+      final response = await http.get(Uri.parse(url), headers: headers);
+      DebugLogger.response('MiMo', url, response.statusCode, response.body);
+
       if (response.statusCode == 200) {
         final json = _decodeResponse(response.body);
         if (json != null) {
+          DebugLogger.log('MiMo', 'Parsing usage response...');
           return ProviderFetchResult(
             usage: _parseGenericUsage(json, provider),
             sourceLabel: 'web',
             strategyID: id,
             strategyKind: kind,
           );
+        } else {
+          DebugLogger.error('MiMo', 'Failed to decode response body');
         }
+      } else {
+        DebugLogger.error('MiMo', 'HTTP ${response.statusCode}');
       }
-    } catch (_) {}
+    } catch (e) {
+      DebugLogger.error('MiMo', 'Request failed', e);
+    }
 
-    // Fallback: return snapshot with cookie info only
+    DebugLogger.log('MiMo', 'Returning cookie-only snapshot');
     return ProviderFetchResult(
       usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
       sourceLabel: 'web:cookie',
@@ -706,11 +723,13 @@ class _GenericCookieStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchMiniMax(Map<String, String> headers) async {
+    const url = 'https://api.minimax.chat/v1/user/info';
+    DebugLogger.request('MiniMax', 'GET', url, headers: headers);
+
     try {
-      final response = await http.get(
-        Uri.parse('https://api.minimax.chat/v1/user/info'),
-        headers: headers,
-      );
+      final response = await http.get(Uri.parse(url), headers: headers);
+      DebugLogger.response('MiniMax', url, response.statusCode, response.body);
+
       if (response.statusCode == 200) {
         final json = _decodeResponse(response.body);
         if (json != null) {
@@ -722,7 +741,9 @@ class _GenericCookieStrategy extends FetchStrategy {
           );
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      DebugLogger.error('MiniMax', 'Request failed', e);
+    }
 
     return ProviderFetchResult(
       usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
@@ -733,11 +754,13 @@ class _GenericCookieStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchZai(Map<String, String> headers) async {
+    const url = 'https://api.z.ai/api/monitor/usage/quota/limit';
+    DebugLogger.request('Zai', 'GET', url, headers: headers);
+
     try {
-      final response = await http.get(
-        Uri.parse('https://api.z.ai/api/monitor/usage/quota/limit'),
-        headers: headers,
-      );
+      final response = await http.get(Uri.parse(url), headers: headers);
+      DebugLogger.response('Zai', url, response.statusCode, response.body);
+
       if (response.statusCode == 200) {
         final json = _decodeResponse(response.body);
         if (json != null) {
@@ -749,7 +772,9 @@ class _GenericCookieStrategy extends FetchStrategy {
           );
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      DebugLogger.error('Zai', 'Request failed', e);
+    }
 
     return ProviderFetchResult(
       usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
@@ -760,39 +785,55 @@ class _GenericCookieStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchClaude(Map<String, String> headers) async {
+    const orgUrl = 'https://claude.ai/api/organizations';
+    DebugLogger.request('Claude', 'GET', orgUrl, headers: headers);
+
     try {
-      // Get organization
-      final orgResponse = await http.get(
-        Uri.parse('https://claude.ai/api/organizations'),
-        headers: headers,
-      );
+      final orgResponse = await http.get(Uri.parse(orgUrl), headers: headers);
+      DebugLogger.response('Claude', orgUrl, orgResponse.statusCode, orgResponse.body, maxLength: 300);
+
       if (orgResponse.statusCode == 200) {
         final orgsData = jsonDecode(orgResponse.body);
         if (orgsData is List && orgsData.isNotEmpty) {
           final org = orgsData[0] as Map<String, dynamic>;
           final orgId = org['uuid'] as String?;
+          DebugLogger.log('Claude', 'Organization ID: $orgId');
+
           if (orgId != null) {
-            // Get usage
-            final usageResponse = await http.get(
-              Uri.parse('https://claude.ai/api/organizations/$orgId/usage'),
-              headers: headers,
-            );
+            final usageUrl = 'https://claude.ai/api/organizations/$orgId/usage';
+            DebugLogger.request('Claude', 'GET', usageUrl, headers: headers);
+
+            final usageResponse = await http.get(Uri.parse(usageUrl), headers: headers);
+            DebugLogger.response('Claude', usageUrl, usageResponse.statusCode, usageResponse.body);
+
             if (usageResponse.statusCode == 200) {
               final usageJson = _decodeResponse(usageResponse.body);
               if (usageJson != null) {
+                DebugLogger.log('Claude', 'Parsing Claude usage response...');
                 return ProviderFetchResult(
                   usage: _parseClaudeUsage(usageJson, org),
                   sourceLabel: 'web',
                   strategyID: id,
                   strategyKind: kind,
                 );
+              } else {
+                DebugLogger.error('Claude', 'Failed to decode usage response');
               }
+            } else {
+              DebugLogger.error('Claude', 'Usage API returned ${usageResponse.statusCode}');
             }
           }
+        } else {
+          DebugLogger.error('Claude', 'No organizations found in response');
         }
+      } else {
+        DebugLogger.error('Claude', 'Organizations API returned ${orgResponse.statusCode}');
       }
-    } catch (_) {}
+    } catch (e) {
+      DebugLogger.error('Claude', 'Request failed', e);
+    }
 
+    DebugLogger.log('Claude', 'Returning cookie-only snapshot');
     return ProviderFetchResult(
       usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
       sourceLabel: 'web:cookie',
@@ -802,6 +843,7 @@ class _GenericCookieStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchOpenAI(Map<String, String> headers) async {
+    DebugLogger.log('OpenAI', 'Cookie-based fetch not yet implemented, returning cookie snapshot');
     return ProviderFetchResult(
       usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
       sourceLabel: 'web:cookie',
@@ -811,6 +853,7 @@ class _GenericCookieStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchCursor(Map<String, String> headers) async {
+    DebugLogger.log('Cursor', 'Cookie-based fetch not yet implemented, returning cookie snapshot');
     return ProviderFetchResult(
       usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
       sourceLabel: 'web:cookie',
@@ -820,7 +863,8 @@ class _GenericCookieStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchGeneric(Map<String, String> headers) async {
-    // Try common endpoints
+    DebugLogger.log(provider.displayName, 'Trying generic API endpoints');
+
     final endpoints = [
       'https://$apiDomain/api/usage',
       'https://$apiDomain/api/user/usage',
@@ -829,8 +873,11 @@ class _GenericCookieStrategy extends FetchStrategy {
     ];
 
     for (final endpoint in endpoints) {
+      DebugLogger.request(provider.displayName, 'GET', endpoint, headers: headers);
       try {
         final response = await http.get(Uri.parse(endpoint), headers: headers);
+        DebugLogger.response(provider.displayName, endpoint, response.statusCode, response.body);
+
         if (response.statusCode == 200) {
           final json = _decodeResponse(response.body);
           if (json != null) {
@@ -842,10 +889,12 @@ class _GenericCookieStrategy extends FetchStrategy {
             );
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        DebugLogger.error(provider.displayName, 'Endpoint $endpoint failed', e);
+      }
     }
 
-    // Return snapshot with cookie info
+    DebugLogger.log(provider.displayName, 'No working endpoint found, returning cookie snapshot');
     return ProviderFetchResult(
       usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
       sourceLabel: 'web:cookie',

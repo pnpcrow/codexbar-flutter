@@ -1,11 +1,9 @@
 import 'dart:io';
 
-import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 
+import '../debug/debug_logger.dart';
 import '../models/usage_provider.dart';
-
-final _log = Logger('BrowserCookieResolver');
 
 enum Browser {
   safari, chrome, chromeBeta, chromeCanary, firefox, edge, dia, arc, brave, vivaldi;
@@ -95,14 +93,24 @@ class BrowserCookieResolver {
   /// Check if any installed browser likely has cookies for this provider.
   Future<bool> hasPlausibleSession(UsageProvider provider) async {
     final order = importOrderFor(provider);
+    DebugLogger.log('CookieResolver', 'Checking plausible session for ${provider.displayName}, browsers: ${order.map((b) => b.displayName).join(', ')}');
+
     for (final browser in order) {
-      if (!_isBrowserInstalled(browser)) continue;
+      if (!_isBrowserInstalled(browser)) {
+        DebugLogger.log('CookieResolver', '  ${browser.displayName}: not installed');
+        continue;
+      }
+      DebugLogger.log('CookieResolver', '  ${browser.displayName}: installed');
+
       if (browser == Browser.chrome) {
-        // Check via Python script
         final result = await _runPythonDecryptor(domainFor(provider), ['__cf_bm']);
-        if (result.isNotEmpty) return true;
+        if (result.isNotEmpty) {
+          DebugLogger.log('CookieResolver', '  ${browser.displayName}: has cookies');
+          return true;
+        }
       }
     }
+    DebugLogger.log('CookieResolver', 'No plausible session found');
     return false;
   }
 
@@ -112,47 +120,64 @@ class BrowserCookieResolver {
     final keyNames = keyCookieNames(provider);
     final order = importOrderFor(provider);
 
-    for (final browser in order) {
-      if (!_isBrowserInstalled(browser)) continue;
+    DebugLogger.log('CookieResolver', 'Resolving cookies for ${provider.displayName} (domain: $domain)');
+    DebugLogger.log('CookieResolver', 'Key cookie names: ${keyNames.join(', ')}');
 
+    for (final browser in order) {
+      if (!_isBrowserInstalled(browser)) {
+        DebugLogger.log('CookieResolver', '  ${browser.displayName}: not installed, skipping');
+        continue;
+      }
+
+      DebugLogger.log('CookieResolver', '  Trying ${browser.displayName}...');
       try {
         String? cookies;
 
         if (browser == Browser.chrome || browser == Browser.edge || browser == Browser.brave) {
-          // Use Python helper for Chrome-based browsers (AES-128-CBC with v24 support)
+          DebugLogger.log('CookieResolver', '    Using Python decryptor for Chrome-based browser');
           cookies = await _decryptChromeCookies(domain, keyNames);
         } else if (browser == Browser.firefox) {
-          // Firefox stores cookies in plaintext
+          DebugLogger.log('CookieResolver', '    Reading Firefox cookies (plaintext)');
           cookies = await _readFirefoxCookies(domain);
         }
 
         if (cookies != null && cookies.isNotEmpty) {
-          _log.info('Got cookies for ${provider.displayName} from ${browser.displayName}');
+          DebugLogger.cookie('CookieResolver', domain, cookies, browser.displayName);
           return CookieResolution(cookieHeader: cookies, browser: browser);
+        } else {
+          DebugLogger.log('CookieResolver', '    No cookies found from ${browser.displayName}');
         }
       } catch (e) {
-        _log.fine('Failed to read cookies from ${browser.displayName}: $e');
+        DebugLogger.error('CookieResolver', 'Failed to read cookies from ${browser.displayName}', e);
       }
     }
+
+    DebugLogger.error('CookieResolver', 'No cookies found for ${provider.displayName} from any browser');
     return null;
   }
 
   /// Decrypt Chrome cookies using the Python helper script.
   Future<String?> _decryptChromeCookies(String domain, List<String> keyNames) async {
     final result = await _runPythonDecryptor(domain, keyNames);
-    if (result.isEmpty) return null;
+    if (result.isEmpty) {
+      DebugLogger.log('CookieResolver', '    Python decryptor returned empty result');
+      return null;
+    }
+    DebugLogger.log('CookieResolver', '    Python decryptor returned ${result.length} cookies');
     return result.join('; ');
   }
 
   /// Run the Python cookie decryptor script.
   Future<List<String>> _runPythonDecryptor(String domain, List<String> cookieNames) async {
     try {
-      // Find the helper script
       final scriptPath = _findHelperScript();
       if (scriptPath == null) {
-        _log.warning('Chrome cookie decryptor script not found');
+        DebugLogger.error('CookieResolver', 'Chrome cookie decryptor script not found');
         return [];
       }
+
+      DebugLogger.log('CookieResolver', '    Script path: $scriptPath');
+      DebugLogger.log('CookieResolver', '    Args: $domain ${cookieNames.join(',')}');
 
       final result = await Process.run('python3', [
         scriptPath,
@@ -160,38 +185,49 @@ class BrowserCookieResolver {
         cookieNames.join(','),
       ]).timeout(const Duration(seconds: 10));
 
+      DebugLogger.log('CookieResolver', '    Exit code: ${result.exitCode}');
+
       if (result.exitCode != 0) {
-        _log.fine('Python decryptor failed: ${result.stderr}');
+        DebugLogger.error('CookieResolver', 'Python decryptor failed', result.stderr);
         return [];
       }
 
       final output = result.stdout.toString().trim();
-      if (output.isEmpty) return [];
+      if (output.isEmpty) {
+        DebugLogger.log('CookieResolver', '    Python decryptor output is empty');
+        return [];
+      }
 
-      return output.split('\n').where((line) => line.contains('=')).toList();
+      final lines = output.split('\n').where((line) => line.contains('=')).toList();
+      DebugLogger.log('CookieResolver', '    Parsed ${lines.length} cookie lines');
+      for (final line in lines) {
+        final name = line.split('=').first;
+        DebugLogger.log('CookieResolver', '      Cookie: $name');
+      }
+      return lines;
     } catch (e) {
-      _log.fine('Failed to run Python decryptor: $e');
+      DebugLogger.error('CookieResolver', 'Failed to run Python decryptor', e);
       return [];
     }
   }
 
   /// Find the Python helper script relative to the app.
   String? _findHelperScript() {
-    // Try multiple locations
     final candidates = [
-      // Relative to executable
-      p.join(p.dirname(Platform.resolvedExecutable), '..', '..', 'scripts', 'chrome_cookie_decryptor.py'),
       p.join(p.dirname(Platform.resolvedExecutable), 'scripts', 'chrome_cookie_decryptor.py'),
-      // Project source location
+      p.join(p.dirname(Platform.resolvedExecutable), '..', '..', 'scripts', 'chrome_cookie_decryptor.py'),
       p.join(Directory.current.path, 'scripts', 'chrome_cookie_decryptor.py'),
       p.join(Directory.current.path, 'codexbar_flutter', 'scripts', 'chrome_cookie_decryptor.py'),
-      // Absolute path (development)
       '/home/elektro/Workspaces/Repositories/codexbar-flutter-mimo/codexbar_flutter/scripts/chrome_cookie_decryptor.py',
     ];
 
     for (final path in candidates) {
-      if (File(path).existsSync()) return path;
+      if (File(path).existsSync()) {
+        DebugLogger.log('CookieResolver', '    Found script at: $path');
+        return path;
+      }
     }
+    DebugLogger.error('CookieResolver', 'Script not found in any candidate path');
     return null;
   }
 
@@ -199,9 +235,11 @@ class BrowserCookieResolver {
   Future<String?> _readFirefoxCookies(String domain) async {
     final home = Platform.environment['HOME'] ?? '';
     final profileDir = Directory('$home/.mozilla/firefox');
-    if (!profileDir.existsSync()) return null;
+    if (!profileDir.existsSync()) {
+      DebugLogger.log('CookieResolver', '    Firefox profile directory not found');
+      return null;
+    }
 
-    // Find default profile
     String? cookiesDb;
     for (final entity in profileDir.listSync()) {
       if (entity is Directory &&
@@ -213,9 +251,13 @@ class BrowserCookieResolver {
         }
       }
     }
-    if (cookiesDb == null) return null;
+    if (cookiesDb == null) {
+      DebugLogger.log('CookieResolver', '    Firefox cookies.sqlite not found');
+      return null;
+    }
 
-    // Copy and read
+    DebugLogger.log('CookieResolver', '    Found Firefox cookies at: $cookiesDb');
+
     final tmpDir = Directory.systemTemp;
     final tmpDb = '${tmpDir.path}/codexbar_ff_cookies_${DateTime.now().microsecondsSinceEpoch}.db';
     File(cookiesDb).copySync(tmpDb);
@@ -236,6 +278,7 @@ class BrowserCookieResolver {
           pairs.add('${parts[0]}=${parts[1]}');
         }
       }
+      DebugLogger.log('CookieResolver', '    Found ${pairs.length} Firefox cookies');
       return pairs.isNotEmpty ? pairs.join('; ') : null;
     } finally {
       try { File(tmpDb).deleteSync(); } catch (_) {}
@@ -244,35 +287,38 @@ class BrowserCookieResolver {
 
   bool _isBrowserInstalled(Browser browser) {
     final home = Platform.environment['HOME'] ?? '';
+    bool installed;
     if (Platform.isLinux) {
       switch (browser) {
         case Browser.chrome:
-          return Directory('$home/.config/google-chrome').existsSync();
+          installed = Directory('$home/.config/google-chrome').existsSync();
         case Browser.firefox:
-          return Directory('$home/.mozilla/firefox').existsSync();
+          installed = Directory('$home/.mozilla/firefox').existsSync();
         case Browser.edge:
-          return Directory('$home/.config/microsoft-edge').existsSync();
+          installed = Directory('$home/.config/microsoft-edge').existsSync();
         case Browser.brave:
-          return Directory('$home/.config/BraveSoftware').existsSync();
+          installed = Directory('$home/.config/BraveSoftware').existsSync();
         default:
-          return false;
+          installed = false;
       }
     } else if (Platform.isMacOS) {
       switch (browser) {
         case Browser.safari:
-          return Directory('/Applications/Safari.app').existsSync();
+          installed = Directory('/Applications/Safari.app').existsSync();
         case Browser.chrome:
-          return Directory('/Applications/Google Chrome.app').existsSync();
+          installed = Directory('/Applications/Google Chrome.app').existsSync();
         case Browser.firefox:
-          return Directory('/Applications/Firefox.app').existsSync();
+          installed = Directory('/Applications/Firefox.app').existsSync();
         case Browser.edge:
-          return Directory('/Applications/Microsoft Edge.app').existsSync();
+          installed = Directory('/Applications/Microsoft Edge.app').existsSync();
         case Browser.brave:
-          return Directory('/Applications/Brave Browser.app').existsSync();
+          installed = Directory('/Applications/Brave Browser.app').existsSync();
         default:
-          return false;
+          installed = false;
       }
+    } else {
+      installed = false;
     }
-    return false;
+    return installed;
   }
 }
