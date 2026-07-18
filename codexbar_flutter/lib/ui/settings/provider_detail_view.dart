@@ -385,14 +385,75 @@ class _ProviderDetailViewState extends ConsumerState<ProviderDetailView> {
       final prov = widget.provider.name.toUpperCase();
 
       if (apiKey.isNotEmpty) {
-        env['${prov}_API_KEY'] = apiKey;
-        env['${prov}_API_TOKEN'] = apiKey;
-        // Also set common env var names
-        if (widget.provider == UsageProvider.zai) env['ZAI_API_TOKEN'] = apiKey;
-        if (widget.provider == UsageProvider.minimax) env['MINIMAX_API_TOKEN'] = apiKey;
-        if (widget.provider == UsageProvider.claude) env['ANTHROPIC_API_KEY'] = apiKey;
-        if (widget.provider == UsageProvider.openai) env['OPENAI_API_KEY'] = apiKey;
-        if (widget.provider == UsageProvider.deepseek) env['DEEPSEEK_API_KEY'] = apiKey;
+        // Set provider-specific env vars
+        switch (widget.provider) {
+          case UsageProvider.zai:
+            env['Z_AI_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.minimax:
+            env['MINIMAX_API_TOKEN'] = apiKey;
+            break;
+          case UsageProvider.claude:
+            env['ANTHROPIC_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.openai:
+            env['OPENAI_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.deepseek:
+            env['DEEPSEEK_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.moonshot:
+            env['MOONSHOT_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.kimi:
+            env['KIMI_AUTH_TOKEN'] = apiKey;
+            break;
+          case UsageProvider.kimik2:
+            env['KIMI_K2_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.copilot:
+            env['COPILOT_API_TOKEN'] = apiKey;
+            break;
+          case UsageProvider.openrouter:
+            env['OPENROUTER_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.elevenlabs:
+            env['ELEVENLABS_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.groq:
+            env['GROQ_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.warp:
+            env['WARP_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.venice:
+            env['VENICE_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.poe:
+            env['POE_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.stepfun:
+            env['STEPFUN_TOKEN'] = apiKey;
+            break;
+          case UsageProvider.doubao:
+            env['DOUBAO_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.amp:
+            env['AMP_API_TOKEN'] = apiKey;
+            break;
+          case UsageProvider.alibaba:
+            env['ALIBABA_API_TOKEN'] = apiKey;
+            break;
+          case UsageProvider.deepgram:
+            env['DEEPGRAM_API_KEY'] = apiKey;
+            break;
+          case UsageProvider.perplexity:
+            env['PERPLEXITY_SESSION_TOKEN'] = apiKey;
+            break;
+          default:
+            env['${prov}_API_KEY'] = apiKey;
+            env['${prov}_API_TOKEN'] = apiKey;
+        }
       }
 
       if (cookie.isNotEmpty) {

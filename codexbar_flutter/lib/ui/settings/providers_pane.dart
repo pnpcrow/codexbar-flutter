@@ -4,8 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/usage_provider.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/storage/settings_store.dart';
+import 'provider_detail_view.dart';
 
-/// Providers settings pane.
+/// Providers settings pane with list and detail view.
 class ProvidersPane extends ConsumerStatefulWidget {
   const ProvidersPane({super.key});
 
@@ -15,16 +16,25 @@ class ProvidersPane extends ConsumerStatefulWidget {
 
 class _ProvidersPaneState extends ConsumerState<ProvidersPane> {
   String _searchQuery = '';
+  UsageProvider? _selectedProvider;
 
   @override
   Widget build(BuildContext context) {
+    // If a provider is selected, show detail view
+    if (_selectedProvider != null) {
+      return ProviderDetailView(
+        provider: _selectedProvider!,
+        onBack: () => setState(() => _selectedProvider = null),
+      );
+    }
+
     final settingsAsync = ref.watch(settingsStoreProvider);
     final enabledAsync = ref.watch(enabledProvidersProvider);
 
     return settingsAsync.when(
       data: (settings) {
         return enabledAsync.when(
-          data: (enabled) => _buildContent(context, settings, enabled),
+          data: (enabled) => _buildList(context, settings, enabled),
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(child: Text('Error: $e')),
         );
@@ -34,7 +44,7 @@ class _ProvidersPaneState extends ConsumerState<ProvidersPane> {
     );
   }
 
-  Widget _buildContent(
+  Widget _buildList(
     BuildContext context,
     SettingsStore settings,
     Set<UsageProvider> enabled,
@@ -110,17 +120,22 @@ class _ProvidersPaneState extends ConsumerState<ProvidersPane> {
                 ),
                 title: Text(provider.displayName),
                 subtitle: Text(provider.cliName, style: const TextStyle(fontSize: 12)),
-                trailing: Switch(
-                  value: isEnabled,
-                  onChanged: (value) async {
-                    settings.toggleProvider(provider);
-                    // Refresh the enabled providers provider
-                    ref.invalidate(enabledProvidersProvider);
-                  },
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Switch(
+                      value: isEnabled,
+                      onChanged: (value) {
+                        settings.toggleProvider(provider);
+                        ref.invalidate(enabledProvidersProvider);
+                      },
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.chevron_right, size: 20),
+                  ],
                 ),
-                onTap: () async {
-                  settings.toggleProvider(provider);
-                  ref.invalidate(enabledProvidersProvider);
+                onTap: () {
+                  setState(() => _selectedProvider = provider);
                 },
               );
             },
