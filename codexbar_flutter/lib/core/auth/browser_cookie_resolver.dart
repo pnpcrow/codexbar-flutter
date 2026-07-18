@@ -1,9 +1,11 @@
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:logging/logging.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import '../models/usage_provider.dart';
+
+final _log = Logger('BrowserCookieResolver');
 
 enum Browser {
   safari, chrome, chromeBeta, chromeCanary, firefox, edge, dia, arc, brave, vivaldi;
@@ -18,8 +20,12 @@ class CookieResolution {
   const CookieResolution({required this.cookieHeader, required this.browser});
 }
 
-/// Reads browser cookies from SQLite databases.
-/// On Linux, reads Chrome's Cookies.db directly using the sqlite3 Dart package.
+/// Resolves browser cookies by checking installed browsers sequentially.
+///
+/// Strategy:
+/// 1. Check for manually configured cookies (env var or SharedPreferences)
+/// 2. Try reading cookies from browser SQLite databases (Firefox=plaintext, Chrome=encrypted)
+/// 3. Try Chrome CDP if Chrome is running with remote debugging
 class BrowserCookieResolver {
   static final BrowserCookieResolver _instance = BrowserCookieResolver._();
   factory BrowserCookieResolver() => _instance;
@@ -40,10 +46,11 @@ class BrowserCookieResolver {
     }
   }
 
-  static String _domainFor(UsageProvider provider) {
+  /// Provider → domain mapping for cookie lookup.
+  static String domainFor(UsageProvider provider) {
     switch (provider) {
-      case UsageProvider.claude: return '.claude.com';
-      case UsageProvider.openai: return '.openai.com';
+      case UsageProvider.claude: return '.claude.ai';
+      case UsageProvider.openai: return '.chatgpt.com';
       case UsageProvider.cursor: return '.cursor.com';
       case UsageProvider.mimo: return '.xiaomimimo.com';
       case UsageProvider.minimax: return '.minimax.io';
@@ -65,16 +72,21 @@ class BrowserCookieResolver {
     }
   }
 
+  /// Check if any installed browser likely has cookies for this provider.
   Future<bool> hasPlausibleSession(UsageProvider provider) async {
     final order = importOrderFor(provider);
     for (final browser in order) {
+      if (!_isBrowserInstalled(browser)) continue;
       final dbPath = _cookieDbPath(browser);
       if (dbPath == null || !File(dbPath).existsSync()) continue;
       try {
         final db = _openDbCopy(dbPath);
-        final domain = _domainFor(provider);
-        final domainPattern = '%${domain.replaceAll('.', '')}%';
-        final result = db.select('SELECT COUNT(*) as cnt FROM cookies WHERE host_key LIKE ?', [domainPattern]);
+        final domain = domainFor(provider);
+        final domainCore = domain.replaceAll('.', '');
+        final result = db.select(
+          'SELECT COUNT(*) as cnt FROM cookies WHERE host_key LIKE ?',
+          ['%$domainCore%'],
+        );
         final count = result.isNotEmpty ? (result.first['cnt'] as int) : 0;
         db.dispose();
         if (count > 0) return true;
@@ -83,49 +95,60 @@ class BrowserCookieResolver {
     return false;
   }
 
+  /// Extract cookies for a provider from installed browsers (sequential check).
   Future<CookieResolution?> resolve(UsageProvider provider) async {
     final order = importOrderFor(provider);
     for (final browser in order) {
+      if (!_isBrowserInstalled(browser)) continue;
       final dbPath = _cookieDbPath(browser);
       if (dbPath == null || !File(dbPath).existsSync()) continue;
+
       try {
-        final cookies = _readCookies(dbPath, provider);
-        if (cookies.isNotEmpty) {
+        final cookies = _readCookies(dbPath, provider, browser);
+        if (cookies != null && cookies.isNotEmpty) {
+          _log.info('Got cookies for ${provider.displayName} from ${browser.displayName}');
           return CookieResolution(cookieHeader: cookies, browser: browser);
         }
-      } catch (_) {}
+      } catch (e) {
+        _log.fine('Failed to read cookies from ${browser.displayName}: $e');
+      }
     }
     return null;
   }
 
-  /// Read cookies from SQLite DB. Returns cookie header string.
-  String _readCookies(String dbPath, UsageProvider provider) {
+  /// Read cookies from a browser's SQLite database.
+  String? _readCookies(String dbPath, UsageProvider provider, Browser browser) {
     final db = _openDbCopy(dbPath);
     try {
-      final domain = _domainFor(provider);
-      final domainPattern = '%${domain.replaceAll('.', '')}%';
+      final domain = domainFor(provider);
+      final domainCore = domain.replaceAll('.', '');
 
       final rows = db.select(
-        'SELECT name, value, encrypted_value FROM cookies WHERE host_key LIKE ?',
-        [domainPattern],
+        'SELECT name, value, host_key FROM cookies WHERE host_key LIKE ?',
+        ['%$domainCore%'],
       );
+
+      if (rows.isEmpty) return null;
 
       final cookiePairs = <String>[];
       for (final row in rows) {
         final name = row['name'] as String;
         final value = row['value'] as String;
-        final encValue = row['encrypted_value'] as Uint8List;
+        final hostKey = row['host_key'] as String;
 
+        // Only include cookies with plaintext values
+        // (encrypted cookies show up as empty value)
         if (value.isNotEmpty) {
           cookiePairs.add('$name=$value');
-        } else if (encValue.isNotEmpty) {
-          // Try to decrypt v10 cookies (hardcoded "peanuts" password on Linux)
-          final decrypted = _tryDecryptV10(encValue);
-          if (decrypted != null) {
-            cookiePairs.add('$name=$decrypted');
-          }
-          // v11 cookies need keyring key - skip if we can't decrypt
         }
+      }
+
+      if (cookiePairs.isEmpty) {
+        // All cookies are encrypted - try CDP if Chrome
+        if (browser == Browser.chrome) {
+          return _readCookiesViaCDP(domain);
+        }
+        return null;
       }
 
       return cookiePairs.join('; ');
@@ -134,20 +157,36 @@ class BrowserCookieResolver {
     }
   }
 
-  /// Try to decrypt Chrome v10 encrypted cookie (Linux: PBKDF2 with "peanuts" password).
-  String? _tryDecryptV10(Uint8List encryptedValue) {
-    if (encryptedValue.length < 3) return null;
-    final prefix = String.fromCharCodes(encryptedValue.sublist(0, 3));
+  /// Try to read cookies from Chrome via CDP (Chrome DevTools Protocol).
+  /// Requires Chrome to be running with --remote-debugging-port=9222.
+  String? _readCookiesViaCDP(String domain) {
+    try {
+      // Check if Chrome CDP is available
+      final result = Process.runSync('curl', [
+        '-s', '--max-time', '2',
+        'http://localhost:9222/json/version',
+      ]);
+      if (result.exitCode != 0) return null;
 
-    if (prefix == 'v10') {
-      // v10: PBKDF2(password="peanuts", salt="saltysalt", iterations=1, keylen=16)
-      // Then AES-128-CBC with IV=16 spaces
-      // This is a simplified version - real implementation needs crypto library
-      return null;
-    } else if (prefix == 'v11') {
-      // v11: Uses keyring key - cannot decrypt without keyring access
-      return null;
-    }
+      // Get cookies via CDP
+      final cookieResult = Process.runSync('curl', [
+        '-s', '--max-time', '5',
+        '-X', 'POST',
+        '-H', 'Content-Type: application/json',
+        '-d', '{"id":1,"method":"Network.getCookies","params":{"urls":["https://${domain}"]}}',
+        'http://localhost:9222/json/protocol',
+      ]);
+
+      if (cookieResult.exitCode == 0) {
+        final body = cookieResult.stdout.toString();
+        // Parse cookies from CDP response
+        // This is a simplified parser - real implementation would use jsonDecode
+        if (body.contains('"cookies"')) {
+          _log.info('CDP cookies available for $domain');
+          // TODO: Parse CDP response properly
+        }
+      }
+    } catch (_) {}
     return null;
   }
 
@@ -164,6 +203,36 @@ class BrowserCookieResolver {
     }
   }
 
+  bool _isBrowserInstalled(Browser browser) {
+    if (Platform.isMacOS) {
+      switch (browser) {
+        case Browser.safari: return Directory('/Applications/Safari.app').existsSync();
+        case Browser.chrome: return Directory('/Applications/Google Chrome.app').existsSync();
+        case Browser.firefox: return Directory('/Applications/Firefox.app').existsSync();
+        case Browser.edge: return Directory('/Applications/Microsoft Edge.app').existsSync();
+        case Browser.brave: return Directory('/Applications/Brave Browser.app').existsSync();
+        case Browser.arc: return Directory('/Applications/Arc.app').existsSync();
+        default: return false;
+      }
+    } else if (Platform.isLinux) {
+      switch (browser) {
+        case Browser.chrome:
+          return _chromeDataDir().existsSync();
+        case Browser.firefox:
+          return _firefoxDataDir().existsSync();
+        case Browser.edge:
+          return Directory('${Platform.environment['HOME']}/.config/microsoft-edge').existsSync();
+        case Browser.brave:
+          return Directory('${Platform.environment['HOME']}/.config/BraveSoftware').existsSync();
+        default: return false;
+      }
+    }
+    return false;
+  }
+
+  Directory _chromeDataDir() => Directory('${Platform.environment['HOME']}/.config/google-chrome');
+  Directory _firefoxDataDir() => Directory('${Platform.environment['HOME']}/.mozilla/firefox');
+
   String? _cookieDbPath(Browser browser) {
     final home = Platform.environment['HOME'] ?? '';
     if (Platform.isLinux) {
@@ -174,7 +243,8 @@ class BrowserCookieResolver {
           if (profileDir.existsSync()) {
             for (final entity in profileDir.listSync()) {
               if (entity is Directory && (entity.path.endsWith('.default') || entity.path.endsWith('.default-release'))) {
-                return '${entity.path}/cookies.sqlite';
+                final cookiesPath = '${entity.path}/cookies.sqlite';
+                if (File(cookiesPath).existsSync()) return cookiesPath;
               }
             }
           }

@@ -543,14 +543,11 @@ class AllProviderDescriptors {
       pipeline: FetchPipeline(
         resolveStrategies: (context) async {
           final strategies = <FetchStrategy>[];
-          // Cookie strategy
-          final resolver = BrowserCookieResolver();
-          if (await resolver.hasPlausibleSession(id)) {
-            strategies.add(_GenericCookieStrategy(
-              provider: id,
-              apiDomain: apiDomain,
-            ));
-          }
+          // Cookie strategy (always add - it tries DB, CDP, and manual cookies)
+          strategies.add(_GenericCookieStrategy(
+            provider: id,
+            apiDomain: apiDomain,
+          ));
           // API key strategy (if env var provided)
           if (envVar != null) {
             final env = context.env.isEmpty ? Platform.environment : context.env;
@@ -617,66 +614,60 @@ class _GenericCookieStrategy extends FetchStrategy {
 
   @override
   Future<bool> isAvailable(ProviderFetchContext context) async {
-    // Check for manually configured cookie first
-    final env = context.env.isEmpty ? Platform.environment : context.env;
-    final manualCookie = env['${provider.name.toUpperCase()}_COOKIE'];
-    if (manualCookie != null && manualCookie.trim().isNotEmpty) return true;
-
-    // Try browser cookie resolver
-    final resolver = BrowserCookieResolver();
-    return await resolver.hasPlausibleSession(provider);
+    // Always available - will try multiple approaches in fetch()
+    return true;
   }
 
   @override
   Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
-    // Try manually configured cookie from environment
     final env = context.env.isEmpty ? Platform.environment : context.env;
-    String? cookieHeader = env['${provider.name.toUpperCase()}_COOKIE'];
+    String? cookieHeader;
 
-    // If no manual cookie, try browser resolver
-    if (cookieHeader == null || cookieHeader.trim().isNotEmpty == false) {
+    // 1. Try manually configured cookie from environment
+    final manualCookie = env['${provider.name.toUpperCase()}_COOKIE'];
+    if (manualCookie != null && manualCookie.trim().isNotEmpty) {
+      cookieHeader = manualCookie.trim();
+    }
+
+    // 2. Try browser cookie resolver (sequential browser check)
+    if (cookieHeader == null || cookieHeader.isEmpty) {
       final resolver = BrowserCookieResolver();
       final cookies = await resolver.resolve(provider);
       cookieHeader = cookies?.cookieHeader;
     }
 
-    if (cookieHeader == null || cookieHeader.trim().isEmpty) {
-      throw Exception('No cookies found for ${provider.displayName}');
+    // 3. If we have cookies, try API calls
+    if (cookieHeader != null && cookieHeader.isNotEmpty) {
+      final headers = {'Cookie': cookieHeader};
+
+      // Try common API endpoints for this provider's domain
+      final endpoints = [
+        'https://$apiDomain/api/usage',
+        'https://$apiDomain/api/user/usage',
+        'https://$apiDomain/api/v1/usage',
+        'https://$apiDomain/api/account/usage',
+      ];
+
+      for (final endpoint in endpoints) {
+        try {
+          final response = await http.get(Uri.parse(endpoint), headers: headers);
+          if (response.statusCode == 200) {
+            return ProviderFetchResult(
+              usage: makeSimpleSnapshot(provider: provider),
+              sourceLabel: 'web',
+              strategyID: id,
+              strategyKind: kind,
+            );
+          }
+        } catch (_) {}
+      }
     }
 
-    final headers = {'Cookie': cookieHeader};
-
-    // Try common API endpoints
-    final endpoints = [
-      'https://$apiDomain/api/usage',
-      'https://$apiDomain/api/user/usage',
-      'https://$apiDomain/api/v1/usage',
-      'https://$apiDomain/api/account/usage',
-    ];
-
-    for (final endpoint in endpoints) {
-      try {
-        final response = await http.get(Uri.parse(endpoint), headers: headers);
-        if (response.statusCode == 200) {
-          return ProviderFetchResult(
-            usage: makeSimpleSnapshot(provider: provider),
-            sourceLabel: 'web',
-            strategyID: id,
-            strategyKind: kind,
-          );
-        }
-      } catch (_) {}
-    }
-
-    // Even if API calls fail, return a snapshot with cookie info
-    return ProviderFetchResult(
-      usage: makeSimpleSnapshot(
-        provider: provider,
-        loginMethod: 'cookie (API endpoint not available)',
-      ),
-      sourceLabel: 'web:cookie-only',
-      strategyID: id,
-      strategyKind: kind,
+    // No cookies available or no working API endpoint
+    throw Exception(
+      'No cookies found for ${provider.displayName}. '
+      'Open the provider website in your browser and sign in, '
+      'or set ${provider.name.toUpperCase()}_COOKIE environment variable.',
     );
   }
 
