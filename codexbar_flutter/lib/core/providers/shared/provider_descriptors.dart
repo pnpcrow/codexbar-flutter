@@ -16,6 +16,7 @@ import '../../models/usage_snapshot.dart';
 import '../fetch_strategy.dart';
 import '../provider_descriptor.dart';
 import 'generic_api_strategy.dart';
+import 'provider_auth_type.dart';
 
 /// All remaining provider descriptors.
 /// Uses generic strategies to avoid code duplication.
@@ -667,29 +668,49 @@ class CookieFetchStrategy extends FetchStrategy {
       'Accept': 'application/json',
     };
 
-    // Provider-specific endpoints and parsing
-    switch (provider) {
-      case UsageProvider.mimo:
-        return _fetchMiMo(headers);
-      case UsageProvider.minimax:
-        return _fetchMiniMax(headers);
-      case UsageProvider.zai:
-        return _fetchZai(headers);
-      case UsageProvider.claude:
-        return _fetchClaude(headers);
-      case UsageProvider.openai:
-        return _fetchOpenAI(headers);
-      case UsageProvider.cursor:
-        return _fetchCursor(headers);
-      case UsageProvider.mistral:
-        return _fetchMistral(headers);
-      case UsageProvider.grok:
-        return _fetchGrok(headers);
-      case UsageProvider.copilot:
-        return _fetchCopilot(headers);
-      default:
-        return _fetchGeneric(headers);
+    // Check if provider supports web auth
+    final authType = ProviderAuthTypeMapper.getAuthType(provider);
+    if (authType == ProviderAuthType.apiOnly) {
+      throw Exception('${provider.displayName} requires an API key, not cookies');
     }
+
+    // Get web API endpoints for this provider
+    final webEndpoints = ProviderAuthTypeMapper.getWebEndpoints(provider);
+    if (webEndpoints.isEmpty) {
+      throw Exception('No web API endpoints for ${provider.displayName}');
+    }
+
+    // Try each web endpoint
+    for (final endpoint in webEndpoints) {
+      DebugLogger.request(provider.displayName, 'GET', endpoint, headers: headers);
+      try {
+        final response = await http.get(Uri.parse(endpoint), headers: headers);
+        DebugLogger.response(provider.displayName, endpoint, response.statusCode, response.body);
+
+        if (response.statusCode == 200) {
+          final contentType = response.headers['content-type'] ?? '';
+          if (contentType.contains('json')) {
+            final json = _decodeResponse(response.body);
+            if (json != null) {
+              return ProviderFetchResult(
+                usage: _parseGenericUsage(json, provider),
+                sourceLabel: 'web',
+                strategyID: id,
+                strategyKind: kind,
+              );
+            }
+          }
+        } else if (response.statusCode == 401 || response.statusCode == 403) {
+          DebugLogger.error(provider.displayName, 'Auth failed ($endpoint)');
+          throw Exception('${provider.displayName} session expired. Log in again.');
+        }
+      } catch (e) {
+        if (e is Exception && e.toString().contains('session expired')) rethrow;
+        DebugLogger.error(provider.displayName, 'Request failed ($endpoint)', e);
+      }
+    }
+
+    throw Exception('No working web endpoint for ${provider.displayName}');
   }
 
   Future<ProviderFetchResult> _fetchMiMo(Map<String, String> headers) async {
