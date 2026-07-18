@@ -818,14 +818,21 @@ class CookieFetchStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchMiniMax(Map<String, String> headers) async {
-    // MiniMax uses web-based coding plan page and remains API
+    // MiniMax API endpoints (global region)
     final endpoints = [
-      'https://www.minimax.io/v1/token_plan/remains',
-      'https://www.minimax.io/v1/api/openplatform/coding_plan/remains',
+      'https://api.minimax.io/v1/token_plan/remains',
+      'https://api.minimax.io/v1/api/openplatform/coding_plan/remains',
+    ];
+
+    // Also try with cookie-based auth for web endpoints
+    final webEndpoints = [
+      'https://platform.minimax.io/v1/token_plan/remains',
       'https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3',
     ];
 
     Map<String, dynamic>? lastJson;
+
+    // Try API endpoints first
     for (final url in endpoints) {
       DebugLogger.request('MiniMax', 'GET', url, headers: headers);
       try {
@@ -839,14 +846,41 @@ class CookieFetchStrategy extends FetchStrategy {
             if (json != null) {
               lastJson = json;
               DebugLogger.log('MiniMax', 'Got JSON from $url');
-              break; // Use first successful JSON response
+              break;
             }
-          } else {
-            DebugLogger.log('MiniMax', 'Got HTML from $url (not JSON)');
           }
+        } else if (response.statusCode == 401 || response.statusCode == 403) {
+          DebugLogger.log('MiniMax', 'Auth failed for $url, trying next');
         }
       } catch (e) {
         DebugLogger.error('MiniMax', 'Request failed ($url)', e);
+      }
+    }
+
+    // Try web endpoints if API failed
+    if (lastJson == null) {
+      for (final url in webEndpoints) {
+        DebugLogger.request('MiniMax', 'GET', url, headers: headers);
+        try {
+          final response = await http.get(Uri.parse(url), headers: headers);
+          DebugLogger.response('MiniMax', url, response.statusCode, response.body, maxLength: 500);
+
+          if (response.statusCode == 200) {
+            final contentType = response.headers['content-type'] ?? '';
+            if (contentType.contains('json')) {
+              final json = _decodeResponse(response.body);
+              if (json != null) {
+                lastJson = json;
+                DebugLogger.log('MiniMax', 'Got JSON from $url');
+                break;
+              }
+            } else {
+              DebugLogger.log('MiniMax', 'Got HTML from $url (not JSON)');
+            }
+          }
+        } catch (e) {
+          DebugLogger.error('MiniMax', 'Request failed ($url)', e);
+        }
       }
     }
 
