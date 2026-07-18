@@ -8,8 +8,6 @@ import '../../core/models/usage_snapshot.dart';
 import '../../core/models/rate_window.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/providers/fetch_strategy.dart';
-import '../../core/providers/provider_registry.dart';
-import '../../core/storage/settings_store.dart';
 
 /// Provider detail/settings view with API test, cookie input, source selection.
 class ProviderDetailView extends ConsumerStatefulWidget {
