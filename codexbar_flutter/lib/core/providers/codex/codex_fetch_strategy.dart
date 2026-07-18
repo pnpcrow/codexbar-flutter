@@ -34,11 +34,13 @@ class CodexOAuthCredentials {
   }
 
   factory CodexOAuthCredentials.fromJson(Map<String, dynamic> json) {
+    // Tokens are nested inside 'tokens' object
+    final tokens = json['tokens'] as Map<String, dynamic>? ?? json;
     return CodexOAuthCredentials(
-      accessToken: json['access_token'] as String? ?? '',
-      refreshToken: json['refresh_token'] as String? ?? '',
-      idToken: json['id_token'] as String?,
-      accountId: json['account_id'] as String?,
+      accessToken: tokens['access_token'] as String? ?? '',
+      refreshToken: tokens['refresh_token'] as String? ?? '',
+      idToken: tokens['id_token'] as String?,
+      accountId: tokens['account_id'] as String?,
       lastRefresh: json['last_refresh'] != null
           ? DateTime.tryParse(json['last_refresh'] as String)
           : null,
@@ -120,11 +122,22 @@ class CodexOAuthFetchStrategy extends FetchStrategy {
     try {
       final home = Platform.environment['HOME'] ?? '';
       final authFile = File('$home/.codex/auth.json');
-      if (!authFile.existsSync()) return null;
+      DebugLogger.log('Codex', 'Looking for auth.json at: ${authFile.path}');
+
+      if (!authFile.existsSync()) {
+        DebugLogger.log('Codex', 'auth.json not found');
+        return null;
+      }
 
       final content = authFile.readAsStringSync();
       final json = jsonDecode(content) as Map<String, dynamic>;
-      return CodexOAuthCredentials.fromJson(json);
+      DebugLogger.log('Codex', 'auth.json keys: ${json.keys.toList()}');
+
+      final credentials = CodexOAuthCredentials.fromJson(json);
+      DebugLogger.log('Codex', 'Access token length: ${credentials.accessToken.length}');
+      DebugLogger.log('Codex', 'Account ID: ${credentials.accountId}');
+
+      return credentials;
     } catch (e) {
       DebugLogger.error('Codex', 'Failed to load auth.json', e);
       return null;
