@@ -737,26 +737,45 @@ class CookieFetchStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchMiniMax(Map<String, String> headers) async {
-    const url = 'https://api.minimax.chat/v1/user/info';
-    DebugLogger.request('MiniMax', 'GET', url, headers: headers);
+    // MiniMax uses web-based coding plan page
+    final baseHost = 'https://platform.minimax.io';
+    final endpoints = [
+      '$baseHost/user-center/payment/coding-plan?cycle_type=3',
+      '$baseHost/v1/api/openplatform/coding_plan/remains',
+      '$baseHost/v1/token_plan/remains',
+    ];
 
-    try {
-      final response = await http.get(Uri.parse(url), headers: headers);
-      DebugLogger.response('MiniMax', url, response.statusCode, response.body);
+    Map<String, dynamic>? lastJson;
+    for (final url in endpoints) {
+      DebugLogger.request('MiniMax', 'GET', url, headers: headers);
+      try {
+        final response = await http.get(Uri.parse(url), headers: headers);
+        DebugLogger.response('MiniMax', url, response.statusCode, response.body, maxLength: 500);
 
-      if (response.statusCode == 200) {
-        final json = _decodeResponse(response.body);
-        if (json != null) {
-          return ProviderFetchResult(
-            usage: _parseGenericUsage(json, provider),
-            sourceLabel: 'web',
-            strategyID: id,
-            strategyKind: kind,
-          );
+        if (response.statusCode == 200) {
+          final contentType = response.headers['content-type'] ?? '';
+          if (contentType.contains('json')) {
+            final json = _decodeResponse(response.body);
+            if (json != null) {
+              lastJson = json;
+              DebugLogger.log('MiniMax', 'Got JSON from $url');
+            }
+          } else {
+            DebugLogger.log('MiniMax', 'Got HTML from $url (not JSON)');
+          }
         }
+      } catch (e) {
+        DebugLogger.error('MiniMax', 'Request failed ($url)', e);
       }
-    } catch (e) {
-      DebugLogger.error('MiniMax', 'Request failed', e);
+    }
+
+    if (lastJson != null) {
+      return ProviderFetchResult(
+        usage: _parseGenericUsage(lastJson, provider),
+        sourceLabel: 'web',
+        strategyID: id,
+        strategyKind: kind,
+      );
     }
 
     return ProviderFetchResult(
@@ -769,8 +788,22 @@ class CookieFetchStrategy extends FetchStrategy {
 
   Future<ProviderFetchResult> _fetchZai(Map<String, String> headers) async {
     const url = 'https://api.z.ai/api/monitor/usage/quota/limit';
-    DebugLogger.request('Zai', 'GET', url, headers: headers);
 
+    // Zai API needs Authorization header, not just cookies
+    // The 'token' cookie is a JWT that can be used as Bearer token
+    final cookieHeader = headers['Cookie'] ?? '';
+    final tokenMatch = RegExp(r'token=([^;]+)').firstMatch(cookieHeader);
+    if (tokenMatch != null) {
+      final jwtToken = tokenMatch.group(1);
+      if (jwtToken != null && jwtToken.isNotEmpty) {
+        headers = {
+          ...headers,
+          'Authorization': 'Bearer $jwtToken',
+        };
+      }
+    }
+
+    DebugLogger.request('Zai', 'GET', url, headers: headers);
     try {
       final response = await http.get(Uri.parse(url), headers: headers);
       DebugLogger.response('Zai', url, response.statusCode, response.body);
@@ -778,12 +811,18 @@ class CookieFetchStrategy extends FetchStrategy {
       if (response.statusCode == 200) {
         final json = _decodeResponse(response.body);
         if (json != null) {
-          return ProviderFetchResult(
-            usage: _parseGenericUsage(json, provider),
-            sourceLabel: 'web',
-            strategyID: id,
-            strategyKind: kind,
-          );
+          // Check if the response indicates success
+          final success = json['success'] as bool? ?? false;
+          if (success) {
+            return ProviderFetchResult(
+              usage: _parseGenericUsage(json, provider),
+              sourceLabel: 'web',
+              strategyID: id,
+              strategyKind: kind,
+            );
+          } else {
+            DebugLogger.error('Zai', 'API returned success=false: ${json['msg']}');
+          }
         }
       }
     } catch (e) {
