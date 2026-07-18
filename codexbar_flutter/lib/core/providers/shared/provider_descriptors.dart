@@ -688,39 +688,38 @@ class CookieFetchStrategy extends FetchStrategy {
 
   Future<ProviderFetchResult> _fetchMiMo(Map<String, String> headers) async {
     final baseUrl = 'https://platform.xiaomimimo.com/api/v1';
-    final endpoints = [
-      '$baseUrl/balance',
-      '$baseUrl/tokenPlan/detail',
-      '$baseUrl/tokenPlan/usage',
-    ];
+    final endpoints = {
+      'balance': '$baseUrl/balance',
+      'detail': '$baseUrl/tokenPlan/detail',
+      'usage': '$baseUrl/tokenPlan/usage',
+    };
 
-    Map<String, dynamic>? lastJson;
-    for (final url in endpoints) {
-      DebugLogger.request('MiMo', 'GET', url, headers: headers);
+    final responses = <String, Map<String, dynamic>>{};
+    for (final entry in endpoints.entries) {
+      DebugLogger.request('MiMo', 'GET', entry.value, headers: headers);
       try {
-        final response = await http.get(Uri.parse(url), headers: headers);
-        DebugLogger.response('MiMo', url, response.statusCode, response.body);
+        final response = await http.get(Uri.parse(entry.value), headers: headers);
+        DebugLogger.response('MiMo', entry.value, response.statusCode, response.body);
 
         if (response.statusCode == 200) {
           final json = _decodeResponse(response.body);
           if (json != null) {
-            lastJson = json;
-            DebugLogger.log('MiMo', 'Got data from $url');
+            responses[entry.key] = json;
+            DebugLogger.log('MiMo', 'Got ${entry.key} data');
           }
         } else if (response.statusCode == 401 || response.statusCode == 403) {
-          DebugLogger.error('MiMo', 'Auth failed ($url): ${response.statusCode}');
           throw Exception('MiMo session expired. Log in at platform.xiaomimimo.com');
         }
       } catch (e) {
         if (e is Exception && e.toString().contains('session expired')) rethrow;
-        DebugLogger.error('MiMo', 'Request failed ($url)', e);
+        DebugLogger.error('MiMo', 'Request failed (${entry.value})', e);
       }
     }
 
-    if (lastJson != null) {
-      DebugLogger.log('MiMo', 'Parsing usage from response');
+    if (responses.isNotEmpty) {
+      DebugLogger.log('MiMo', 'Parsing ${responses.length} responses');
       return ProviderFetchResult(
-        usage: _parseGenericUsage(lastJson, provider),
+        usage: _parseMiMoUsage(responses),
         sourceLabel: 'web',
         strategyID: id,
         strategyKind: kind,
@@ -736,13 +735,94 @@ class CookieFetchStrategy extends FetchStrategy {
     );
   }
 
+  UsageSnapshot _parseMiMoUsage(Map<String, Map<String, dynamic>> responses) {
+    double? usagePercent;
+    double? balance;
+    String? currency;
+    String? planName;
+    DateTime? periodEnd;
+    int? usedTokens;
+    int? limitTokens;
+
+    // Parse balance
+    final balanceData = responses['balance']?['data'];
+    if (balanceData is Map) {
+      balance = double.tryParse(balanceData['balance']?.toString() ?? '');
+      currency = balanceData['currency'] as String?;
+      DebugLogger.log('MiMo', 'Balance: $balance $currency');
+    }
+
+    // Parse plan detail
+    final detailData = responses['detail']?['data'];
+    if (detailData is Map) {
+      planName = detailData['planName'] as String?;
+      final periodEndStr = detailData['currentPeriodEnd'] as String?;
+      if (periodEndStr != null) {
+        periodEnd = DateTime.tryParse(periodEndStr);
+      }
+      DebugLogger.log('MiMo', 'Plan: $planName, period ends: $periodEnd');
+    }
+
+    // Parse usage
+    final usageData = responses['usage']?['data'];
+    if (usageData is Map) {
+      // Try monthUsage first, then usage
+      final monthUsage = usageData['monthUsage'];
+      if (monthUsage is Map) {
+        usagePercent = (monthUsage['percent'] as num?)?.toDouble();
+        final items = monthUsage['items'] as List?;
+        if (items != null && items.isNotEmpty) {
+          final firstItem = items[0] as Map;
+          usedTokens = firstItem['used'] as int?;
+          limitTokens = firstItem['limit'] as int?;
+        }
+      }
+      if (usagePercent == null) {
+        final usage = usageData['usage'];
+        if (usage is Map) {
+          usagePercent = (usage['percent'] as num?)?.toDouble();
+        }
+      }
+      DebugLogger.log('MiMo', 'Usage percent: $usagePercent, used: $usedTokens, limit: $limitTokens');
+    }
+
+    // Normalize percent (0-1 -> 0-100)
+    if (usagePercent != null && usagePercent > 0 && usagePercent < 1) {
+      usagePercent = usagePercent * 100;
+    }
+
+    // Build description for identity
+    final descParts = <String>[];
+    if (planName != null) descParts.add(planName);
+    if (balance != null) descParts.add('\$$balance ${currency ?? ""}');
+    if (usedTokens != null && limitTokens != null) {
+      final usedB = (usedTokens / 1e9).toStringAsFixed(1);
+      final limitB = (limitTokens / 1e9).toStringAsFixed(0);
+      descParts.add('$usedB/$limitB tokens');
+    }
+
+    return UsageSnapshot(
+      primary: usagePercent != null
+          ? RateWindow(
+              usedPercent: usagePercent,
+              windowMinutes: null,
+              resetsAt: periodEnd,
+            )
+          : null,
+      updatedAt: DateTime.now(),
+      identity: ProviderIdentitySnapshot(
+        providerID: UsageProvider.mimo,
+        loginMethod: descParts.isNotEmpty ? descParts.join(' | ') : 'cookie',
+      ),
+    );
+  }
+
   Future<ProviderFetchResult> _fetchMiniMax(Map<String, String> headers) async {
-    // MiniMax uses web-based coding plan page
-    final baseHost = 'https://platform.minimax.io';
+    // MiniMax uses web-based coding plan page and remains API
     final endpoints = [
-      '$baseHost/user-center/payment/coding-plan?cycle_type=3',
-      '$baseHost/v1/api/openplatform/coding_plan/remains',
-      '$baseHost/v1/token_plan/remains',
+      'https://www.minimax.io/v1/token_plan/remains',
+      'https://www.minimax.io/v1/api/openplatform/coding_plan/remains',
+      'https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3',
     ];
 
     Map<String, dynamic>? lastJson;
@@ -759,6 +839,7 @@ class CookieFetchStrategy extends FetchStrategy {
             if (json != null) {
               lastJson = json;
               DebugLogger.log('MiniMax', 'Got JSON from $url');
+              break; // Use first successful JSON response
             }
           } else {
             DebugLogger.log('MiniMax', 'Got HTML from $url (not JSON)');
