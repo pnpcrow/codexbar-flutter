@@ -206,7 +206,17 @@ class _ProviderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasData = snapshot != null && snapshot!.primary != null;
+    final hasData = snapshot != null;
+    final hasPrimary = snapshot?.primary != null;
+    final identity = snapshot?.identity;
+    final loginMethod = identity?.loginMethod;
+
+    // Determine if loginMethod has useful info (not just "cookie" or "api-key")
+    final hasUsefulInfo = loginMethod != null &&
+        loginMethod.isNotEmpty &&
+        loginMethod != 'cookie' &&
+        loginMethod != 'api-key' &&
+        !loginMethod.startsWith('cookie (');
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 3),
@@ -218,7 +228,7 @@ class _ProviderCard extends StatelessWidget {
             // Header row
             Row(
               children: [
-                // Provider icon placeholder
+                // Provider icon
                 Container(
                   width: 28,
                   height: 28,
@@ -238,7 +248,7 @@ class _ProviderCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 10),
-                // Name + email
+                // Name + account info
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -249,9 +259,10 @@ class _ProviderCard extends StatelessWidget {
                               fontWeight: FontWeight.w600,
                             ),
                       ),
-                      if (snapshot?.identity?.accountEmail != null)
+                      if (identity?.accountEmail != null &&
+                          identity!.accountEmail!.isNotEmpty)
                         Text(
-                          snapshot!.identity!.accountEmail!,
+                          identity.accountEmail!,
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                 color: Theme.of(context).colorScheme.outline,
                               ),
@@ -265,8 +276,14 @@ class _ProviderCard extends StatelessWidget {
               ],
             ),
 
-            // Usage section
-            if (hasData) ...[
+            // Provider details (plan, balance, tokens)
+            if (hasUsefulInfo) ...[
+              const SizedBox(height: 8),
+              _buildInfoChips(context, loginMethod!),
+            ],
+
+            // Usage progress bars
+            if (hasPrimary) ...[
               const SizedBox(height: 10),
               _buildUsageSection(context),
             ],
@@ -376,6 +393,49 @@ class _ProviderCard extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+
+  Widget _buildInfoChips(BuildContext context, String loginMethod) {
+    // Split by | to show as separate chips
+    final parts = loginMethod.split('|').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: parts.map((part) {
+        // Determine icon based on content
+        IconData icon = Icons.info_outline;
+        if (part.contains('\$') || part.contains('USD') || part.contains('balance')) {
+          icon = Icons.account_balance_wallet;
+        } else if (part.contains('token') || part.contains('Token')) {
+          icon = Icons.token;
+        } else if (part.contains('Standard') || part.contains('Plan') || part.contains('Pro')) {
+          icon = Icons.workspace_premium;
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(150),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 12, color: Theme.of(context).colorScheme.outline),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  part,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 
