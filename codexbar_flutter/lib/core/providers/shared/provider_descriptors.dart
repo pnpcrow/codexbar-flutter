@@ -968,33 +968,71 @@ class CookieFetchStrategy extends FetchStrategy {
   }
 
   UsageSnapshot _parseGenericUsage(Map<String, dynamic> json, UsageProvider provider) {
-    // Try to extract usage info from common response formats
+    DebugLogger.log(provider.displayName, 'Parsing usage from JSON: ${json.keys.toList()}');
+
     double? percent;
     DateTime? resetsAt;
 
-    // Try various common fields
+    // Try various common fields at top level
     for (final key in ['usage_percent', 'used_percent', 'percent', 'usage', 'quota_used']) {
       final value = json[key];
       if (value is num) {
         percent = value.toDouble();
+        DebugLogger.log(provider.displayName, '  Found percent at top-level.$key: $percent');
         break;
       }
       if (value is Map) {
         percent = (value['percent'] as num?)?.toDouble();
+        DebugLogger.log(provider.displayName, '  Found percent at top-level.$key.percent: $percent');
         break;
       }
     }
 
-    // Try nested data
+    // Try nested data object
     if (percent == null && json['data'] is Map) {
       final data = json['data'] as Map<String, dynamic>;
+      DebugLogger.log(provider.displayName, '  Checking data fields: ${data.keys.toList()}');
+
+      // Direct fields
       percent = (data['usage_percent'] as num?)?.toDouble() ??
-          (data['used_percent'] as num?)?.toDouble();
+          (data['used_percent'] as num?)?.toDouble() ??
+          (data['percent'] as num?)?.toDouble();
+
+      // MiMo: data.usage.percent or data.monthUsage.percent
+      if (percent == null) {
+        final usage = data['usage'];
+        if (usage is Map) {
+          percent = (usage['percent'] as num?)?.toDouble();
+          DebugLogger.log(provider.displayName, '  Found data.usage.percent: $percent');
+        }
+      }
+      if (percent == null) {
+        final monthUsage = data['monthUsage'];
+        if (monthUsage is Map) {
+          percent = (monthUsage['percent'] as num?)?.toDouble();
+          DebugLogger.log(provider.displayName, '  Found data.monthUsage.percent: $percent');
+        }
+      }
+
+      // Extract resetsAt if available
+      final periodEnd = data['currentPeriodEnd'] as String?;
+      if (periodEnd != null) {
+        resetsAt = DateTime.tryParse(periodEnd);
+        DebugLogger.log(provider.displayName, '  Found resetsAt: $resetsAt');
+      }
     }
 
+    // Normalize: if percent is 0-1 scale (like MiMo's 0.1333), convert to 0-100
+    if (percent != null && percent > 0 && percent < 1) {
+      DebugLogger.log(provider.displayName, '  Normalizing percent: $percent -> ${percent * 100}');
+      percent = percent * 100;
+    }
+
+    DebugLogger.log(provider.displayName, '  Final percent: $percent');
     return makeSimpleSnapshot(
       provider: provider,
       primaryPercent: percent,
+      primaryResetsAt: resetsAt,
       loginMethod: 'cookie',
     );
   }
