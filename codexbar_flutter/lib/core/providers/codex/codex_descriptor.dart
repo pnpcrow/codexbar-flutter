@@ -1,3 +1,4 @@
+import '../../debug/debug_logger.dart';
 import '../../models/provider_branding.dart';
 import '../../models/provider_metadata.dart';
 import '../../models/usage_provider.dart';
@@ -43,16 +44,21 @@ class CodexDescriptor {
 
     // 1. OAuth strategy (reads from ~/.codex/auth.json)
     final oauth = CodexOAuthFetchStrategy();
-    if (await oauth.isAvailable(context)) {
+    final oauthAvailable = await oauth.isAvailable(context);
+    DebugLogger.log('Codex', 'OAuth available: $oauthAvailable');
+    if (oauthAvailable) {
       strategies.add(oauth);
     }
 
     // 2. CLI strategy (if codex binary is installed)
     final cli = CodexCLIFetchStrategy();
-    if (await cli.isAvailable(context)) {
+    final cliAvailable = await cli.isAvailable(context);
+    DebugLogger.log('Codex', 'CLI available: $cliAvailable');
+    if (cliAvailable) {
       strategies.add(cli);
     }
 
+    DebugLogger.log('Codex', 'Resolved ${strategies.length} strategies');
     return strategies;
   }
 }

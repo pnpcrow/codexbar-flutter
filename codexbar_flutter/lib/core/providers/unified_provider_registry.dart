@@ -35,7 +35,6 @@ class UnifiedProviderRegistry {
       case UsageProvider.codex:
       case UsageProvider.claude:
       case UsageProvider.openai:
-      case UsageProvider.mimo:
       case UsageProvider.minimax:
       case UsageProvider.zai:
       case UsageProvider.deepseek:
@@ -64,7 +63,6 @@ class UnifiedProviderRegistry {
       case UsageProvider.kimi:
       case UsageProvider.kimik2:
       case UsageProvider.alibaba:
-      case UsageProvider.perplexity:
       case UsageProvider.deepgram:
       case UsageProvider.synthetic:
       case UsageProvider.codebuff:
