@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
@@ -6,8 +7,11 @@ import '../../auth/browser_cookie_resolver.dart';
 import '../../models/fetch_kind.dart';
 import '../../models/fetch_result.dart';
 import '../../models/provider_branding.dart';
+import '../../models/provider_identity.dart';
 import '../../models/provider_metadata.dart';
+import '../../models/rate_window.dart';
 import '../../models/usage_provider.dart';
+import '../../models/usage_snapshot.dart';
 import '../fetch_strategy.dart';
 import '../provider_descriptor.dart';
 import 'generic_api_strategy.dart';
@@ -418,11 +422,12 @@ class AllProviderDescriptors {
     cliName: 'zenmux',
   );
 
-  static final _mimo = _simpleProvider(
+  static final _mimo = _cookieProvider(
     id: UsageProvider.mimo,
     displayName: 'MiMo',
     color: 0xFFFF6B35,
     cliName: 'mimo',
+    apiDomain: 'platform.xiaomimimo.com',
   );
 
   static final _t3chat = _simpleProvider(
@@ -599,7 +604,7 @@ class AllProviderDescriptors {
   }
 }
 
-/// Generic cookie-based fetch strategy.
+/// Generic cookie-based fetch strategy with provider-specific API endpoints.
 class _GenericCookieStrategy extends FetchStrategy {
   final UsageProvider provider;
   final String apiDomain;
@@ -614,7 +619,6 @@ class _GenericCookieStrategy extends FetchStrategy {
 
   @override
   Future<bool> isAvailable(ProviderFetchContext context) async {
-    // Always available - will try multiple approaches in fetch()
     return true;
   }
 
@@ -636,38 +640,299 @@ class _GenericCookieStrategy extends FetchStrategy {
       cookieHeader = cookies?.cookieHeader;
     }
 
-    // 3. If we have cookies, try API calls
-    if (cookieHeader != null && cookieHeader.isNotEmpty) {
-      final headers = {'Cookie': cookieHeader};
+    if (cookieHeader == null || cookieHeader.isEmpty) {
+      throw Exception(
+        'No cookies found for ${provider.displayName}. '
+        'Open the provider website in your browser and sign in.',
+      );
+    }
 
-      // Try common API endpoints for this provider's domain
-      final endpoints = [
-        'https://$apiDomain/api/usage',
-        'https://$apiDomain/api/user/usage',
-        'https://$apiDomain/api/v1/usage',
-        'https://$apiDomain/api/account/usage',
-      ];
+    // 3. Try provider-specific API endpoints
+    return await _fetchWithCookies(cookieHeader);
+  }
 
-      for (final endpoint in endpoints) {
-        try {
-          final response = await http.get(Uri.parse(endpoint), headers: headers);
-          if (response.statusCode == 200) {
+  Future<ProviderFetchResult> _fetchWithCookies(String cookieHeader) async {
+    final headers = {
+      'Cookie': cookieHeader,
+      'Accept': 'application/json',
+    };
+
+    // Provider-specific endpoints and parsing
+    switch (provider) {
+      case UsageProvider.mimo:
+        return _fetchMiMo(headers);
+      case UsageProvider.minimax:
+        return _fetchMiniMax(headers);
+      case UsageProvider.zai:
+        return _fetchZai(headers);
+      case UsageProvider.claude:
+        return _fetchClaude(headers);
+      case UsageProvider.openai:
+        return _fetchOpenAI(headers);
+      case UsageProvider.cursor:
+        return _fetchCursor(headers);
+      default:
+        return _fetchGeneric(headers);
+    }
+  }
+
+  Future<ProviderFetchResult> _fetchMiMo(Map<String, String> headers) async {
+    // MiMo usage API
+    try {
+      final response = await http.get(
+        Uri.parse('https://platform.xiaomimimo.com/api/user/usage'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        final json = _decodeResponse(response.body);
+        if (json != null) {
+          return ProviderFetchResult(
+            usage: _parseGenericUsage(json, provider),
+            sourceLabel: 'web',
+            strategyID: id,
+            strategyKind: kind,
+          );
+        }
+      }
+    } catch (_) {}
+
+    // Fallback: return snapshot with cookie info only
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchMiniMax(Map<String, String> headers) async {
+    try {
+      final response = await http.get(
+        Uri.parse('https://api.minimax.chat/v1/user/info'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        final json = _decodeResponse(response.body);
+        if (json != null) {
+          return ProviderFetchResult(
+            usage: _parseGenericUsage(json, provider),
+            sourceLabel: 'web',
+            strategyID: id,
+            strategyKind: kind,
+          );
+        }
+      }
+    } catch (_) {}
+
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchZai(Map<String, String> headers) async {
+    try {
+      final response = await http.get(
+        Uri.parse('https://api.z.ai/api/monitor/usage/quota/limit'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        final json = _decodeResponse(response.body);
+        if (json != null) {
+          return ProviderFetchResult(
+            usage: _parseGenericUsage(json, provider),
+            sourceLabel: 'web',
+            strategyID: id,
+            strategyKind: kind,
+          );
+        }
+      }
+    } catch (_) {}
+
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchClaude(Map<String, String> headers) async {
+    try {
+      // Get organization
+      final orgResponse = await http.get(
+        Uri.parse('https://claude.ai/api/organizations'),
+        headers: headers,
+      );
+      if (orgResponse.statusCode == 200) {
+        final orgsData = jsonDecode(orgResponse.body);
+        if (orgsData is List && orgsData.isNotEmpty) {
+          final org = orgsData[0] as Map<String, dynamic>;
+          final orgId = org['uuid'] as String?;
+          if (orgId != null) {
+            // Get usage
+            final usageResponse = await http.get(
+              Uri.parse('https://claude.ai/api/organizations/$orgId/usage'),
+              headers: headers,
+            );
+            if (usageResponse.statusCode == 200) {
+              final usageJson = _decodeResponse(usageResponse.body);
+              if (usageJson != null) {
+                return ProviderFetchResult(
+                  usage: _parseClaudeUsage(usageJson, org),
+                  sourceLabel: 'web',
+                  strategyID: id,
+                  strategyKind: kind,
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchOpenAI(Map<String, String> headers) async {
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchCursor(Map<String, String> headers) async {
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchGeneric(Map<String, String> headers) async {
+    // Try common endpoints
+    final endpoints = [
+      'https://$apiDomain/api/usage',
+      'https://$apiDomain/api/user/usage',
+      'https://$apiDomain/api/v1/usage',
+      'https://$apiDomain/api/account/usage',
+    ];
+
+    for (final endpoint in endpoints) {
+      try {
+        final response = await http.get(Uri.parse(endpoint), headers: headers);
+        if (response.statusCode == 200) {
+          final json = _decodeResponse(response.body);
+          if (json != null) {
             return ProviderFetchResult(
-              usage: makeSimpleSnapshot(provider: provider),
+              usage: _parseGenericUsage(json, provider),
               sourceLabel: 'web',
               strategyID: id,
               strategyKind: kind,
             );
           }
-        } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
+    // Return snapshot with cookie info
+    return ProviderFetchResult(
+      usage: makeSimpleSnapshot(provider: provider, loginMethod: 'cookie'),
+      sourceLabel: 'web:cookie',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Map<String, dynamic>? _decodeResponse(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is List && decoded.isNotEmpty) {
+        return {'data': decoded};
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  UsageSnapshot _parseGenericUsage(Map<String, dynamic> json, UsageProvider provider) {
+    // Try to extract usage info from common response formats
+    double? percent;
+    DateTime? resetsAt;
+
+    // Try various common fields
+    for (final key in ['usage_percent', 'used_percent', 'percent', 'usage', 'quota_used']) {
+      final value = json[key];
+      if (value is num) {
+        percent = value.toDouble();
+        break;
+      }
+      if (value is Map) {
+        percent = (value['percent'] as num?)?.toDouble();
+        break;
       }
     }
 
-    // No cookies available or no working API endpoint
-    throw Exception(
-      'No cookies found for ${provider.displayName}. '
-      'Open the provider website in your browser and sign in, '
-      'or set ${provider.name.toUpperCase()}_COOKIE environment variable.',
+    // Try nested data
+    if (percent == null && json['data'] is Map) {
+      final data = json['data'] as Map<String, dynamic>;
+      percent = (data['usage_percent'] as num?)?.toDouble() ??
+          (data['used_percent'] as num?)?.toDouble();
+    }
+
+    return makeSimpleSnapshot(
+      provider: provider,
+      primaryPercent: percent,
+      loginMethod: 'cookie',
+    );
+  }
+
+  UsageSnapshot _parseClaudeUsage(Map<String, dynamic> json, Map<String, dynamic> org) {
+    RateWindow? primary;
+    RateWindow? secondary;
+
+    final rateLimit = json['rate_limit'] as Map<String, dynamic>?;
+    if (rateLimit?['five_hour'] != null) {
+      final fiveHour = rateLimit!['five_hour'] as Map<String, dynamic>;
+      primary = RateWindow(
+        usedPercent: (fiveHour['used_percent'] as num?)?.toDouble() ?? 0,
+        windowMinutes: 300,
+        resetsAt: fiveHour['resets_at'] != null
+            ? DateTime.tryParse(fiveHour['resets_at'] as String)
+            : null,
+      );
+    }
+    if (rateLimit?['seven_day'] != null) {
+      final sevenDay = rateLimit!['seven_day'] as Map<String, dynamic>;
+      secondary = RateWindow(
+        usedPercent: (sevenDay['used_percent'] as num?)?.toDouble() ?? 0,
+        windowMinutes: 10080,
+        resetsAt: sevenDay['resets_at'] != null
+            ? DateTime.tryParse(sevenDay['resets_at'] as String)
+            : null,
+      );
+    }
+
+    return UsageSnapshot(
+      primary: primary,
+      secondary: secondary,
+      updatedAt: DateTime.now(),
+      identity: ProviderIdentitySnapshot(
+        providerID: UsageProvider.claude,
+        accountEmail: org['email'] as String?,
+        accountOrganization: org['name'] as String?,
+        loginMethod: 'cookie',
+      ),
     );
   }
 
