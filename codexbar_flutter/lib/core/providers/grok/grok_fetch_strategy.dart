@@ -70,8 +70,43 @@ class GrokWebFetchStrategy extends FetchStrategy {
       throw Exception('Grok API error: ${response.statusCode}');
     }
 
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
-    return _parseResponse(json);
+    // Handle empty response body
+    if (response.body.isEmpty) {
+      DebugLogger.log('Grok', 'Empty response body, returning cookie snapshot');
+      return ProviderFetchResult(
+        usage: UsageSnapshot(
+          updatedAt: DateTime.now(),
+          identity: const ProviderIdentitySnapshot(
+            providerID: UsageProvider.grok,
+            loginMethod: 'cookie',
+          ),
+        ),
+        sourceLabel: 'web:cookie',
+        strategyID: id,
+        strategyKind: kind,
+      );
+    }
+
+    // Try to parse JSON response
+    try {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      return _parseResponse(json);
+    } catch (e) {
+      DebugLogger.error('Grok', 'Failed to parse response', e);
+      // Return cookie snapshot if parsing fails
+      return ProviderFetchResult(
+        usage: UsageSnapshot(
+          updatedAt: DateTime.now(),
+          identity: const ProviderIdentitySnapshot(
+            providerID: UsageProvider.grok,
+            loginMethod: 'cookie',
+          ),
+        ),
+        sourceLabel: 'web:cookie',
+        strategyID: id,
+        strategyKind: kind,
+      );
+    }
   }
 
   @override

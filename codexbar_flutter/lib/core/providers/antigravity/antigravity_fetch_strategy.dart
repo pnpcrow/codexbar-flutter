@@ -29,24 +29,46 @@ class AntigravityLocalFetchStrategy extends FetchStrategy {
 
   @override
   Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
-    // Try to find running Antigravity process
-    // Check common ports for Antigravity's local server
-    final ports = [9222, 9223, 9224, 8080, 8081];
+    // Try to find running Antigravity process by checking common ports
+    final ports = [9222, 9223, 9224, 8080, 8081, 3000, 3001];
 
     for (final port in ports) {
       try {
         final response = await http
             .get(Uri.parse('http://localhost:$port/status'))
-            .timeout(const Duration(seconds: 2));
+            .timeout(const Duration(seconds: 1));
 
-        if (response.statusCode == 200) {
-          final json = jsonDecode(response.body) as Map<String, dynamic>;
-          return _parseResponse(json, 'local:$port');
+        if (response.statusCode == 200 && response.body.isNotEmpty) {
+          try {
+            final json = jsonDecode(response.body) as Map<String, dynamic>;
+            return _parseResponse(json, 'local:$port');
+          } catch (_) {
+            // Not valid JSON, try next port
+          }
         }
       } catch (_) {
         // Port not listening, try next
       }
     }
+
+    // Try to detect agy process
+    try {
+      final result = await Process.run('pgrep', ['-f', 'agy']);
+      if (result.exitCode == 0) {
+        return ProviderFetchResult(
+          usage: UsageSnapshot(
+            updatedAt: DateTime.now(),
+            identity: const ProviderIdentitySnapshot(
+              providerID: UsageProvider.antigravity,
+              loginMethod: 'detected (no API)',
+            ),
+          ),
+          sourceLabel: 'local:detected',
+          strategyID: id,
+          strategyKind: kind,
+        );
+      }
+    } catch (_) {}
 
     throw Exception('No Antigravity process found');
   }
