@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../../debug/debug_logger.dart';
 import '../../models/provider_branding.dart';
 import '../../models/provider_metadata.dart';
@@ -7,7 +9,7 @@ import '../provider_descriptor.dart';
 import 'zai_fetch_strategy.dart';
 
 /// Zai provider descriptor.
-/// API-only provider - requires Z_AI_API_KEY.
+/// Supports API token (Z_AI_API_KEY) and web cookie strategies.
 class ZaiDescriptor {
   static final descriptor = ProviderDescriptor(
     id: UsageProvider.zai,
@@ -40,17 +42,17 @@ class ZaiDescriptor {
     ProviderFetchContext context,
   ) async {
     final strategies = <FetchStrategy>[];
+    final env = context.env.isEmpty ? Platform.environment : context.env;
 
-    // Zai is API-only - requires Z_AI_API_KEY
-    final api = ZaiAPIFetchStrategy();
-    final available = await api.isAvailable(context);
-    DebugLogger.log('Zai', 'Resolving strategies, API key available: $available');
+    // 1. API token strategy (Z_AI_API_KEY from env or settings)
+    final apiKey = env['Z_AI_API_KEY']?.trim();
+    DebugLogger.log('Zai', 'Resolving strategies, API key: ${apiKey != null ? "set (${apiKey.length} chars)" : "not set"}');
 
-    if (available) {
-      strategies.add(api);
+    if (apiKey != null && apiKey.isNotEmpty) {
+      strategies.add(ZaiAPIFetchStrategy());
       DebugLogger.log('Zai', 'Added API strategy');
     } else {
-      DebugLogger.log('Zai', 'No API key found. Set Z_AI_API_KEY environment variable.');
+      DebugLogger.log('Zai', 'No API key. Set Z_AI_API_KEY or enter in Settings > Providers > z.ai');
     }
 
     return strategies;

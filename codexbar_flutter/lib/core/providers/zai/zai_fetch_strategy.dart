@@ -1,8 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
-import '../../auth/cli_token_resolver.dart';
+import '../../debug/debug_logger.dart';
 import '../../models/fetch_kind.dart';
 import '../../models/fetch_result.dart';
 import '../../models/provider_identity.dart';
@@ -11,6 +12,7 @@ import '../../models/usage_provider.dart';
 import '../../models/usage_snapshot.dart';
 import '../fetch_strategy.dart';
 
+/// Zai API fetch strategy - uses Z_AI_API_KEY from env or settings.
 class ZaiAPIFetchStrategy extends FetchStrategy {
   @override
   String get id => 'zai.api';
@@ -20,56 +22,55 @@ class ZaiAPIFetchStrategy extends FetchStrategy {
 
   @override
   Future<bool> isAvailable(ProviderFetchContext context) async {
-    final resolver = CLITokenResolver();
-    return resolver.resolve(UsageProvider.zai, env: context.env) != null;
+    return _getApiKey(context) != null;
   }
 
   @override
   Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
-    final resolver = CLITokenResolver();
-    final resolution = resolver.resolve(UsageProvider.zai, env: context.env);
-    if (resolution == null) {
-      throw Exception('No Zai API token found');
+    final apiKey = _getApiKey(context);
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('Z_AI_API_KEY not set. Get your API key from https://z.ai/manage-apikey');
     }
 
-    final apiKey = resolution.token;
-    final headers = {
-      'Authorization': 'Bearer $apiKey',
-      'accept': 'application/json',
-    };
+    // Try different API regions
+    for (final host in ['api.z.ai', 'open.bigmodel.cn']) {
+      final url = 'https://$host/api/monitor/usage/quota/limit';
+      DebugLogger.request('Zai', 'GET', url);
 
-    final response = await http.get(
-      Uri.parse('https://api.z.ai/api/monitor/usage/quota/limit'),
-      headers: headers,
-    );
+      try {
+        final response = await http.get(
+          Uri.parse(url),
+          headers: {
+            'Authorization': 'Bearer $apiKey',
+            'Accept': 'application/json',
+          },
+        );
+        DebugLogger.response('Zai', url, response.statusCode, response.body);
 
-    if (response.statusCode == 401 || response.statusCode == 403) {
-      throw Exception('Invalid Zai API token');
+        if (response.statusCode == 200) {
+          final json = jsonDecode(response.body) as Map<String, dynamic>;
+          return _parseResponse(json, host);
+        } else if (response.statusCode == 401 || response.statusCode == 403) {
+          throw Exception('Invalid Zai API key. Get one from https://z.ai/manage-apikey');
+        }
+      } catch (e) {
+        if (e is Exception && e.toString().contains('Invalid Zai')) rethrow;
+        continue;
+      }
     }
 
-    if (response.statusCode != 200) {
-      throw Exception('Zai API error: ${response.statusCode}');
-    }
-
-    if (response.body.isEmpty) {
-      throw Exception('Zai API returned empty response');
-    }
-
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
-    final snapshot = _parseUsageResponse(json);
-
-    return ProviderFetchResult(
-      usage: snapshot,
-      sourceLabel: 'api',
-      strategyID: id,
-      strategyKind: kind,
-    );
+    throw Exception('Zai API failed. Check your API key.');
   }
 
   @override
   bool shouldFallback(Object error, ProviderFetchContext context) => false;
 
-  UsageSnapshot _parseUsageResponse(Map<String, dynamic> json) {
+  String? _getApiKey(ProviderFetchContext context) {
+    final env = context.env.isEmpty ? Platform.environment : context.env;
+    return env['Z_AI_API_KEY']?.trim();
+  }
+
+  ProviderFetchResult _parseResponse(Map<String, dynamic> json, String host) {
     final success = json['success'] as bool? ?? false;
     final code = json['code'] as int? ?? 0;
 
@@ -83,7 +84,6 @@ class ZaiAPIFetchStrategy extends FetchStrategy {
     final planName = _extractPlanName(data);
 
     RateWindow? tokenLimit;
-    RateWindow? sessionTokenLimit;
     RateWindow? timeLimit;
 
     for (final limit in limits) {
@@ -91,66 +91,47 @@ class ZaiAPIFetchStrategy extends FetchStrategy {
       final type = entry['type'] as String? ?? '';
       final unit = entry['unit'] as int? ?? 0;
       final number = entry['number'] as int? ?? 0;
-      final usage = entry['usage'] as int?;
-      final currentValue = entry['currentValue'] as int?;
-      final remaining = entry['remaining'] as int?;
       final percentage = (entry['percentage'] as num?)?.toDouble() ?? 0;
       final nextResetTime = entry['nextResetTime'] as int?;
 
       final windowMinutes = _computeWindowMinutes(unit, number);
-      final usedPercent = _computeUsedPercent(usage, currentValue, remaining, percentage);
       final resetsAt = nextResetTime != null
           ? DateTime.fromMillisecondsSinceEpoch(nextResetTime)
           : null;
 
       final window = RateWindow(
-        usedPercent: usedPercent,
+        usedPercent: percentage,
         windowMinutes: windowMinutes,
         resetsAt: resetsAt,
       );
 
       if (type == 'TOKENS_LIMIT') {
-        if (tokenLimit == null ||
-            (windowMinutes ?? 0) > (tokenLimit.windowMinutes ?? 0)) {
-          if (tokenLimit != null) {
-            sessionTokenLimit = tokenLimit;
-          }
-          tokenLimit = window;
-        } else {
-          sessionTokenLimit = window;
-        }
+        tokenLimit = window;
       } else if (type == 'TIME_LIMIT') {
         timeLimit = window;
       }
     }
 
-    final primary = tokenLimit ?? timeLimit;
-    final secondary = (tokenLimit != null && timeLimit != null) ? timeLimit : null;
-
-    return UsageSnapshot(
-      primary: primary,
-      secondary: secondary,
-      tertiary: sessionTokenLimit,
-      updatedAt: DateTime.now(),
-      identity: ProviderIdentitySnapshot(
-        providerID: UsageProvider.zai,
-        loginMethod: planName,
+    return ProviderFetchResult(
+      usage: UsageSnapshot(
+        primary: tokenLimit ?? timeLimit,
+        secondary: (tokenLimit != null && timeLimit != null) ? timeLimit : null,
+        updatedAt: DateTime.now(),
+        identity: ProviderIdentitySnapshot(
+          providerID: UsageProvider.zai,
+          loginMethod: planName ?? 'api ($host)',
+        ),
       ),
+      sourceLabel: 'api',
+      strategyID: id,
+      strategyKind: kind,
     );
   }
 
   String? _extractPlanName(Map<String, dynamic> data) {
-    final candidates = [
-      data['planName'],
-      data['plan'],
-      data['plan_type'],
-      data['packageName'],
-    ];
-    for (final candidate in candidates) {
-      if (candidate is String) {
-        final trimmed = candidate.trim();
-        if (trimmed.isNotEmpty) return trimmed;
-      }
+    for (final key in ['planName', 'plan', 'plan_type', 'packageName']) {
+      final value = data[key];
+      if (value is String && value.trim().isNotEmpty) return value.trim();
     }
     return null;
   }
@@ -158,45 +139,11 @@ class ZaiAPIFetchStrategy extends FetchStrategy {
   int? _computeWindowMinutes(int unit, int number) {
     if (number <= 0) return null;
     switch (unit) {
-      case 5: // minutes
-        return number;
-      case 3: // hours
-        return number * 60;
-      case 1: // days
-        return number * 24 * 60;
-      case 6: // weeks
-        return number * 7 * 24 * 60;
-      default:
-        return null;
+      case 5: return number; // minutes
+      case 3: return number * 60; // hours
+      case 1: return number * 24 * 60; // days
+      case 6: return number * 7 * 24 * 60; // weeks
+      default: return null;
     }
-  }
-
-  double _computeUsedPercent(
-    int? usage,
-    int? currentValue,
-    int? remaining,
-    double percentage,
-  ) {
-    if (usage != null && usage > 0) {
-      int? usedRaw;
-      if (remaining != null) {
-        final usedFromRemaining = usage - remaining;
-        if (currentValue != null) {
-          usedRaw = usedFromRemaining > currentValue ? usedFromRemaining : currentValue;
-        } else {
-          usedRaw = usedFromRemaining;
-        }
-      } else if (currentValue != null) {
-        usedRaw = currentValue;
-      }
-
-      if (usedRaw != null) {
-        final used = usedRaw.clamp(0, usage);
-        final percent = (used / usage) * 100;
-        return percent.clamp(0.0, 100.0);
-      }
-    }
-
-    return percentage;
   }
 }
