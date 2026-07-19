@@ -28,7 +28,6 @@ import 'core/providers/kimi/kimi_descriptor.dart';
 import 'core/providers/kimik2/kimik2_descriptor.dart';
 import 'core/providers/litellm/litellm_descriptor.dart';
 import 'core/providers/llmproxy/llmproxy_descriptor.dart';
-import 'core/providers/minimax/minimax_descriptor.dart';
 import 'core/providers/moonshot/moonshot_descriptor.dart';
 import 'core/providers/openai/openai_descriptor.dart';
 import 'core/providers/openrouter/openrouter_descriptor.dart';
@@ -62,7 +61,6 @@ void main() async {
   registry.register(PoeDescriptor.descriptor);
   registry.register(KimiDescriptor.descriptor);
   registry.register(KimiK2Descriptor.descriptor);
-  registry.register(MiniMaxDescriptor.descriptor);
   registry.register(AlibabaDescriptor.descriptor);
   registry.register(PerplexityDescriptor.descriptor);
   registry.register(DeepgramDescriptor.descriptor);
