@@ -211,11 +211,17 @@ class _ProviderCard extends StatelessWidget {
     final identity = snapshot?.identity;
     final loginMethod = identity?.loginMethod;
 
+    // Debug: print what we're getting
+    if (provider == UsageProvider.codex) {
+      debugPrint('Codex Card: snapshot=${snapshot != null}, identity=${identity != null}, loginMethod=$loginMethod, hasPrimary=$hasPrimary');
+    }
+
     // Determine if loginMethod has useful info (not just "cookie" or "api-key")
     final hasUsefulInfo = loginMethod != null &&
         loginMethod.isNotEmpty &&
         loginMethod != 'cookie' &&
         loginMethod != 'api-key' &&
+        loginMethod != 'oauth' &&
         !loginMethod.startsWith('cookie (');
 
     return Card(

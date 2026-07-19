@@ -98,7 +98,25 @@ class CodexOAuthFetchStrategy extends FetchStrategy {
       }
 
       final json = jsonDecode(response.body) as Map<String, dynamic>;
+      DebugLogger.log('Codex', 'Response keys: ${json.keys.toList()}');
+
+      final rateLimit = json['rate_limit'] as Map<String, dynamic>?;
+      if (rateLimit != null) {
+        DebugLogger.log('Codex', 'rate_limit keys: ${rateLimit.keys.toList()}');
+        DebugLogger.log('Codex', 'plan_type: ${rateLimit['plan_type']}');
+        DebugLogger.log('Codex', 'primary_window: ${rateLimit['primary_window']}');
+        DebugLogger.log('Codex', 'secondary_window: ${rateLimit['secondary_window']}');
+      }
+
+      final credits = json['credits'] as Map<String, dynamic>?;
+      if (credits != null) {
+        DebugLogger.log('Codex', 'credits: $credits');
+      }
+
       final snapshot = _parseUsageResponse(json, credentials);
+      DebugLogger.log('Codex', 'Parsed identity: ${snapshot.identity?.loginMethod}');
+      DebugLogger.log('Codex', 'Primary percent: ${snapshot.primary?.usedPercent}');
+      DebugLogger.log('Codex', 'Secondary percent: ${snapshot.secondary?.usedPercent}');
 
       return ProviderFetchResult(
         usage: snapshot,
@@ -147,23 +165,19 @@ class CodexOAuthFetchStrategy extends FetchStrategy {
   UsageSnapshot _parseUsageResponse(Map<String, dynamic> json, CodexOAuthCredentials credentials) {
     RateWindow? primary;
     RateWindow? secondary;
-    String? planType;
-    String? resetInfo;
+
+    // plan_type is at top level, not inside rate_limit
+    final planType = json['plan_type'] as String?;
 
     final rateLimit = json['rate_limit'] as Map<String, dynamic>?;
     if (rateLimit != null) {
-      planType = rateLimit['plan_type'] as String?;
-
-      // Parse primary window (session/5-hour)
+      // Parse primary window
       final primaryWindow = rateLimit['primary_window'] as Map<String, dynamic>?;
       if (primaryWindow != null) {
         primary = _parseWindow(primaryWindow);
-        if (primary?.resetsAt != null) {
-          resetInfo = 'Resets: ${_formatResetTime(primary!.resetsAt!)}';
-        }
       }
 
-      // Parse secondary window (weekly)
+      // Parse secondary window
       final secondaryWindow = rateLimit['secondary_window'] as Map<String, dynamic>?;
       if (secondaryWindow != null) {
         secondary = _parseWindow(secondaryWindow);
@@ -172,19 +186,28 @@ class CodexOAuthFetchStrategy extends FetchStrategy {
 
     // Parse credits
     final credits = json['credits'] as Map<String, dynamic>?;
-    String? creditInfo;
-    if (credits != null) {
-      final balance = credits['balance'];
-      if (balance != null) {
-        creditInfo = 'Credits: $balance';
-      }
-    }
+    final balance = credits?['balance']?.toString();
+
+    // Parse rate_limit_reset_credits
+    final resetCredits = json['rate_limit_reset_credits'] as Map<String, dynamic>?;
+    final availableResets = resetCredits?['available_count'] as int?;
 
     // Build description
     final descParts = <String>[];
-    if (planType != null) descParts.add(planType);
-    if (creditInfo != null) descParts.add(creditInfo);
-    if (resetInfo != null) descParts.add(resetInfo);
+    if (planType != null && planType.isNotEmpty) {
+      descParts.add(planType[0].toUpperCase() + planType.substring(1));
+    }
+    if (balance != null && balance != '0') {
+      descParts.add('Credits: $balance');
+    }
+    if (availableResets != null && availableResets > 0) {
+      descParts.add('$availableResets resets');
+    }
+
+    // Add reset time info
+    if (primary?.resetsAt != null) {
+      descParts.add('Resets: ${_formatResetTime(primary!.resetsAt!)}');
+    }
 
     return UsageSnapshot(
       primary: primary,
@@ -197,25 +220,36 @@ class CodexOAuthFetchStrategy extends FetchStrategy {
     );
   }
 
+  RateWindow? _parseWindow(Map<String, dynamic> json) {
+    final usedPercent = (json['used_percent'] as num?)?.toDouble();
+    if (usedPercent == null) return null;
+
+    // reset_at is a Unix timestamp (seconds)
+    DateTime? resetsAt;
+    final resetAtValue = json['reset_at'];
+    if (resetAtValue is int) {
+      resetsAt = DateTime.fromMillisecondsSinceEpoch(resetAtValue * 1000);
+    } else if (resetAtValue is String) {
+      resetsAt = DateTime.tryParse(resetAtValue);
+    }
+
+    // limit_window_seconds -> window minutes
+    final limitWindowSeconds = json['limit_window_seconds'] as int?;
+    final windowMinutes = limitWindowSeconds != null ? (limitWindowSeconds / 60).round() : null;
+
+    return RateWindow(
+      usedPercent: usedPercent,
+      windowMinutes: windowMinutes,
+      resetsAt: resetsAt,
+    );
+  }
+
   String _formatResetTime(DateTime resetsAt) {
     final diff = resetsAt.difference(DateTime.now());
     if (diff.isNegative) return 'now';
     if (diff.inDays > 0) return '${diff.inDays}d ${diff.inHours % 24}h';
     if (diff.inHours > 0) return '${diff.inHours}h ${diff.inMinutes % 60}m';
     return '${diff.inMinutes}m';
-  }
-
-  RateWindow? _parseWindow(Map<String, dynamic> json) {
-    final usedPercent = (json['used_percent'] as num?)?.toDouble();
-    if (usedPercent == null) return null;
-
-    return RateWindow(
-      usedPercent: usedPercent,
-      windowMinutes: json['window_minutes'] as int?,
-      resetsAt: json['resets_at'] != null
-          ? DateTime.tryParse(json['resets_at'] as String)
-          : null,
-    );
   }
 }
 
