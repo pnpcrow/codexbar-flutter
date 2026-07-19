@@ -147,16 +147,23 @@ class CodexOAuthFetchStrategy extends FetchStrategy {
   UsageSnapshot _parseUsageResponse(Map<String, dynamic> json, CodexOAuthCredentials credentials) {
     RateWindow? primary;
     RateWindow? secondary;
+    String? planType;
+    String? resetInfo;
 
     final rateLimit = json['rate_limit'] as Map<String, dynamic>?;
     if (rateLimit != null) {
-      // Parse primary window
+      planType = rateLimit['plan_type'] as String?;
+
+      // Parse primary window (session/5-hour)
       final primaryWindow = rateLimit['primary_window'] as Map<String, dynamic>?;
       if (primaryWindow != null) {
         primary = _parseWindow(primaryWindow);
+        if (primary?.resetsAt != null) {
+          resetInfo = 'Resets: ${_formatResetTime(primary!.resetsAt!)}';
+        }
       }
 
-      // Parse secondary window
+      // Parse secondary window (weekly)
       final secondaryWindow = rateLimit['secondary_window'] as Map<String, dynamic>?;
       if (secondaryWindow != null) {
         secondary = _parseWindow(secondaryWindow);
@@ -173,15 +180,29 @@ class CodexOAuthFetchStrategy extends FetchStrategy {
       }
     }
 
+    // Build description
+    final descParts = <String>[];
+    if (planType != null) descParts.add(planType);
+    if (creditInfo != null) descParts.add(creditInfo);
+    if (resetInfo != null) descParts.add(resetInfo);
+
     return UsageSnapshot(
       primary: primary,
       secondary: secondary,
       updatedAt: DateTime.now(),
       identity: ProviderIdentitySnapshot(
         providerID: UsageProvider.codex,
-        loginMethod: creditInfo ?? 'oauth',
+        loginMethod: descParts.isNotEmpty ? descParts.join(' | ') : 'oauth',
       ),
     );
+  }
+
+  String _formatResetTime(DateTime resetsAt) {
+    final diff = resetsAt.difference(DateTime.now());
+    if (diff.isNegative) return 'now';
+    if (diff.inDays > 0) return '${diff.inDays}d ${diff.inHours % 24}h';
+    if (diff.inHours > 0) return '${diff.inHours}h ${diff.inMinutes % 60}m';
+    return '${diff.inMinutes}m';
   }
 
   RateWindow? _parseWindow(Map<String, dynamic> json) {
