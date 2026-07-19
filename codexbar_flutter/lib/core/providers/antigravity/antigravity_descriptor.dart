@@ -1,3 +1,4 @@
+import '../../debug/debug_logger.dart';
 import '../../models/provider_branding.dart';
 import '../../models/provider_metadata.dart';
 import '../../models/usage_provider.dart';
@@ -37,16 +38,22 @@ class AntigravityDescriptor {
     ProviderFetchContext context,
   ) async {
     final strategies = <FetchStrategy>[];
+    DebugLogger.log('Antigravity', 'Resolving strategies');
 
     // 1. Local probe (check running Antigravity processes)
     strategies.add(AntigravityLocalFetchStrategy());
+    DebugLogger.log('Antigravity', 'Added local probe strategy');
 
     // 2. CLI strategy (if agy binary is installed)
     final cli = AntigravityCLIFetchStrategy();
-    if (await cli.isAvailable(context)) {
+    final cliAvailable = await cli.isAvailable(context);
+    DebugLogger.log('Antigravity', 'CLI available: $cliAvailable');
+    if (cliAvailable) {
       strategies.add(cli);
+      DebugLogger.log('Antigravity', 'Added CLI strategy');
     }
 
+    DebugLogger.log('Antigravity', 'Total strategies: ${strategies.length}');
     return strategies;
   }
 }

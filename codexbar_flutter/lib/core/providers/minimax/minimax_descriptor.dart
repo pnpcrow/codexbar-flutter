@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../../debug/debug_logger.dart';
 import '../../models/provider_branding.dart';
 import '../../models/provider_metadata.dart';
 import '../../models/usage_provider.dart';
@@ -44,12 +45,15 @@ class MiniMaxDescriptor {
 
     // 1. API token strategy
     final apiToken = env['MINIMAX_API_TOKEN']?.trim();
+    DebugLogger.log('MiniMax', 'Resolving strategies, API token: ${apiToken != null ? "set" : "not set"}');
     if (apiToken != null && apiToken.isNotEmpty) {
       strategies.add(MiniMaxAPIFetchStrategy());
+      DebugLogger.log('MiniMax', 'Added API strategy');
     }
 
     // 2. Web cookie strategy
     strategies.add(MiniMaxWebFetchStrategy());
+    DebugLogger.log('MiniMax', 'Added Web strategy, total strategies: ${strategies.length}');
 
     return strategies;
   }

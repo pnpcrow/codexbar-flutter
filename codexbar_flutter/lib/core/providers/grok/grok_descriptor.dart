@@ -1,3 +1,4 @@
+import '../../debug/debug_logger.dart';
 import '../../models/provider_branding.dart';
 import '../../models/provider_metadata.dart';
 import '../../models/usage_provider.dart';
@@ -41,12 +42,16 @@ class GrokDescriptor {
 
     // 1. CLI strategy (if grok binary is installed)
     final cli = GrokCLIFetchStrategy();
-    if (await cli.isAvailable(context)) {
+    final cliAvailable = await cli.isAvailable(context);
+    DebugLogger.log('Grok', 'Resolving strategies, CLI available: $cliAvailable');
+    if (cliAvailable) {
       strategies.add(cli);
+      DebugLogger.log('Grok', 'Added CLI strategy');
     }
 
     // 2. Web cookie strategy
     strategies.add(GrokWebFetchStrategy());
+    DebugLogger.log('Grok', 'Added Web strategy, total strategies: ${strategies.length}');
 
     return strategies;
   }
