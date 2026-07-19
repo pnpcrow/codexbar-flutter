@@ -1,8 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
-import '../../auth/cli_token_resolver.dart';
+import '../../debug/debug_logger.dart';
 import '../../models/fetch_kind.dart';
 import '../../models/fetch_result.dart';
 import '../../models/provider_identity.dart';
@@ -11,8 +12,7 @@ import '../../models/usage_provider.dart';
 import '../../models/usage_snapshot.dart';
 import '../fetch_strategy.dart';
 
-/// MiniMax API fetch strategy.
-/// Uses MINIMAX_API_TOKEN to fetch usage from MiniMax API.
+/// MiniMax API fetch strategy - uses MINIMAX_API_TOKEN.
 class MiniMaxAPIFetchStrategy extends FetchStrategy {
   @override
   String get id => 'minimax.api';
@@ -22,77 +22,195 @@ class MiniMaxAPIFetchStrategy extends FetchStrategy {
 
   @override
   Future<bool> isAvailable(ProviderFetchContext context) async {
-    final resolver = CLITokenResolver();
-    return resolver.resolve(UsageProvider.minimax, env: context.env) != null;
+    final env = context.env.isEmpty ? Platform.environment : context.env;
+    final token = env['MINIMAX_API_TOKEN']?.trim();
+    return token != null && token.isNotEmpty;
   }
 
   @override
   Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
-    final resolver = CLITokenResolver();
-    final resolution = resolver.resolve(UsageProvider.minimax, env: context.env);
-    if (resolution == null) {
-      throw Exception('No MiniMax API token found');
+    final env = context.env.isEmpty ? Platform.environment : context.env;
+    final token = env['MINIMAX_API_TOKEN']?.trim();
+    if (token == null || token.isEmpty) {
+      throw Exception('MINIMAX_API_TOKEN not set');
     }
 
-    final apiKey = resolution.token;
-    final headers = {
-      'Authorization': 'Bearer $apiKey',
-      'Content-Type': 'application/json',
-    };
+    // Try global region first, then China
+    for (final region in ['global', 'cn']) {
+      final host = region == 'global' ? 'api.minimax.io' : 'api.minimaxi.com';
+      final url = 'https://$host/v1/token_plan/remains';
 
-    final response = await http.get(
-      Uri.parse('https://api.minimax.chat/v1/user/info'),
-      headers: headers,
-    );
+      DebugLogger.request('MiniMax', 'GET', url);
+      try {
+        final response = await http.get(
+          Uri.parse(url),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'MM-API-Source': 'CodexBar',
+          },
+        );
+        DebugLogger.response('MiniMax', url, response.statusCode, response.body);
 
-    if (response.statusCode == 401) {
-      throw Exception('Invalid MiniMax API token');
+        if (response.statusCode == 200) {
+          final json = jsonDecode(response.body) as Map<String, dynamic>;
+          return _parseResponse(json, 'api');
+        } else if (response.statusCode == 401 || response.statusCode == 403) {
+          if (region == 'global') continue; // Try China
+          throw Exception('Invalid MiniMax API token');
+        }
+      } catch (e) {
+        if (region == 'cn') rethrow;
+        continue;
+      }
     }
 
-    if (response.statusCode != 200) {
-      throw Exception('MiniMax API error: ${response.statusCode}');
+    throw Exception('MiniMax API failed');
+  }
+
+  @override
+  bool shouldFallback(Object error, ProviderFetchContext context) {
+    if (error.toString().contains('Invalid')) return true;
+    if (error.toString().contains('404')) return true;
+    return false;
+  }
+
+  ProviderFetchResult _parseResponse(Map<String, dynamic> json, String source) {
+    // Parse MiniMax token plan response
+    final baseResp = json['base_resp'] as Map<String, dynamic>?;
+    if (baseResp != null) {
+      final statusCode = baseResp['status_code'] as int?;
+      if (statusCode != null && statusCode != 0) {
+        throw Exception('MiniMax API error: ${baseResp['status_msg']}');
+      }
     }
 
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
-    final snapshot = _parseUsageResponse(json);
+    // Parse usage data
+    double? percent;
+    String? planName;
+
+    final data = json['data'] ?? json;
+    if (data is Map) {
+      final tokenPlan = data['token_plan'] ?? data['tokenPlan'];
+      if (tokenPlan is Map) {
+        final used = (tokenPlan['used'] as num?)?.toDouble() ?? 0;
+        final total = (tokenPlan['total'] as num?)?.toDouble() ?? 1;
+        percent = (used / total * 100).clamp(0, 100);
+        planName = tokenPlan['plan_name'] as String?;
+      }
+    }
 
     return ProviderFetchResult(
-      usage: snapshot,
-      sourceLabel: 'api',
+      usage: UsageSnapshot(
+        primary: percent != null ? RateWindow(usedPercent: percent) : null,
+        updatedAt: DateTime.now(),
+        identity: ProviderIdentitySnapshot(
+          providerID: UsageProvider.minimax,
+          loginMethod: planName ?? 'api',
+        ),
+      ),
+      sourceLabel: source,
       strategyID: id,
       strategyKind: kind,
     );
+  }
+}
+
+/// MiniMax web fetch strategy - uses browser cookies.
+class MiniMaxWebFetchStrategy extends FetchStrategy {
+  @override
+  String get id => 'minimax.web';
+
+  @override
+  ProviderFetchKind get kind => ProviderFetchKind.web;
+
+  @override
+  Future<bool> isAvailable(ProviderFetchContext context) async {
+    // Always available - will try to get cookies in fetch()
+    return true;
+  }
+
+  @override
+  Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
+    final env = context.env.isEmpty ? Platform.environment : context.env;
+
+    // Try manual cookie from environment
+    String? cookieHeader = env['MINIMAX_COOKIE'];
+    String? bearerToken = env['MINIMAX_API_TOKEN'];
+
+    // If no manual cookie, try browser
+    if (cookieHeader == null || cookieHeader.isEmpty) {
+      // TODO: Browser cookie extraction for MiniMax
+      throw Exception('No MiniMax cookies found. Set MINIMAX_COOKIE or MINIMAX_API_TOKEN.');
+    }
+
+    // Build headers
+    final headers = <String, String>{
+      'Cookie': cookieHeader,
+      'Accept': 'application/json',
+    };
+    if (bearerToken != null && bearerToken.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $bearerToken';
+    }
+
+    // Try web endpoints
+    final endpoints = [
+      'https://platform.minimax.io/v1/token_plan/remains',
+      'https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3',
+    ];
+
+    for (final url in endpoints) {
+      DebugLogger.request('MiniMax', 'GET', url, headers: headers);
+      try {
+        final response = await http.get(Uri.parse(url), headers: headers);
+        DebugLogger.response('MiniMax', url, response.statusCode, response.body);
+
+        if (response.statusCode == 200) {
+          final contentType = response.headers['content-type'] ?? '';
+          if (contentType.contains('json')) {
+            final json = jsonDecode(response.body) as Map<String, dynamic>;
+            return _parseResponse(json, 'web');
+          }
+        }
+      } catch (e) {
+        DebugLogger.error('MiniMax', 'Request failed ($url)', e);
+      }
+    }
+
+    throw Exception('No working MiniMax endpoint found');
   }
 
   @override
   bool shouldFallback(Object error, ProviderFetchContext context) => false;
 
-  UsageSnapshot _parseUsageResponse(Map<String, dynamic> json) {
-    RateWindow? primary;
+  ProviderFetchResult _parseResponse(Map<String, dynamic> json, String source) {
+    double? percent;
+    String? planName;
 
-    final data = json['data'] as Map<String, dynamic>?;
-    if (data != null) {
-      final totalTokens = (data['total_tokens'] as num?)?.toDouble() ?? 0;
-      final limitTokens = (data['limit_tokens'] as num?)?.toDouble() ?? 0;
-      final percentUsed =
-          limitTokens > 0 ? (totalTokens / limitTokens) * 100 : 0.0;
-
-      primary = RateWindow(
-        usedPercent: percentUsed.clamp(0.0, 100.0),
-        windowMinutes: null,
-        resetsAt: data['resets_at'] != null
-            ? DateTime.parse(data['resets_at'] as String)
-            : null,
-      );
+    final data = json['data'] ?? json;
+    if (data is Map) {
+      final tokenPlan = data['token_plan'] ?? data['tokenPlan'];
+      if (tokenPlan is Map) {
+        final used = (tokenPlan['used'] as num?)?.toDouble() ?? 0;
+        final total = (tokenPlan['total'] as num?)?.toDouble() ?? 1;
+        percent = (used / total * 100).clamp(0, 100);
+        planName = tokenPlan['plan_name'] as String?;
+      }
     }
 
-    return UsageSnapshot(
-      primary: primary,
-      updatedAt: DateTime.now(),
-      identity: const ProviderIdentitySnapshot(
-        providerID: UsageProvider.minimax,
-        loginMethod: 'api-key',
+    return ProviderFetchResult(
+      usage: UsageSnapshot(
+        primary: percent != null ? RateWindow(usedPercent: percent) : null,
+        updatedAt: DateTime.now(),
+        identity: ProviderIdentitySnapshot(
+          providerID: UsageProvider.minimax,
+          loginMethod: planName ?? 'web',
+        ),
       ),
+      sourceLabel: source,
+      strategyID: id,
+      strategyKind: kind,
     );
   }
 }

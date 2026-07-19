@@ -6,28 +6,27 @@ import '../provider_descriptor.dart';
 import 'grok_fetch_strategy.dart';
 
 /// Grok provider descriptor.
-/// Direct port of Swift GrokProviderDescriptor.
+/// Supports CLI and web cookie strategies.
 class GrokDescriptor {
   static final descriptor = ProviderDescriptor(
     id: UsageProvider.grok,
     metadata: const ProviderMetadata(
       id: UsageProvider.grok,
       displayName: 'Grok',
-      sessionLabel: 'Usage',
-      weeklyLabel: 'Credits',
+      sessionLabel: 'Credits',
+      weeklyLabel: 'On-demand',
       supportsOpus: false,
-      supportsCredits: true,
-      creditsHint: 'Credits',
+      supportsCredits: false,
       toggleTitle: 'Show Grok usage',
       cliName: 'grok',
       defaultEnabled: false,
-      dashboardURL: 'https://grok.com/settings/billing',
-      statusPageURL: 'https://status.grok.com',
+      dashboardURL: 'https://grok.com/?_s=usage',
+      statusLinkURL: 'https://status.x.ai',
     ),
     branding: const ProviderBranding(
       iconStyle: 'grok',
       iconResourceName: 'ProviderIcon-grok',
-      colorValue: 0xFF10A37F, // RGB(16, 163, 127)
+      colorValue: 0xFF10A37F,
     ),
     pipeline: FetchPipeline(
       resolveStrategies: _resolveStrategies,
@@ -40,10 +39,14 @@ class GrokDescriptor {
   ) async {
     final strategies = <FetchStrategy>[];
 
-    final web = GrokWebFetchStrategy();
-    if (await web.isAvailable(context)) {
-      strategies.add(web);
+    // 1. CLI strategy (if grok binary is installed)
+    final cli = GrokCLIFetchStrategy();
+    if (await cli.isAvailable(context)) {
+      strategies.add(cli);
     }
+
+    // 2. Web cookie strategy
+    strategies.add(GrokWebFetchStrategy());
 
     return strategies;
   }

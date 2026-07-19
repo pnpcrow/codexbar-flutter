@@ -34,9 +34,11 @@ class UnifiedProviderRegistry {
     switch (provider) {
       case UsageProvider.codex:
       case UsageProvider.mimo:
+      case UsageProvider.minimax:
+      case UsageProvider.grok:
+      case UsageProvider.antigravity:
       case UsageProvider.claude:
       case UsageProvider.openai:
-      case UsageProvider.minimax:
       case UsageProvider.zai:
       case UsageProvider.deepseek:
       case UsageProvider.moonshot:
@@ -44,7 +46,6 @@ class UnifiedProviderRegistry {
       case UsageProvider.copilot:
       case UsageProvider.cursor:
       case UsageProvider.mistral:
-      case UsageProvider.grok:
       case UsageProvider.perplexity:
       case UsageProvider.windsurf:
       case UsageProvider.kiro:

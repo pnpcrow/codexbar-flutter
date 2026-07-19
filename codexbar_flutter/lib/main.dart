@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
+import 'core/providers/antigravity/antigravity_descriptor.dart';
 import 'core/providers/codex/codex_descriptor.dart';
+import 'core/providers/grok/grok_descriptor.dart';
+import 'core/providers/minimax/minimax_descriptor.dart';
 import 'core/providers/mimo/mimo_descriptor.dart';
 import 'core/providers/provider_registry.dart';
 import 'core/providers/unified_provider_registry.dart';
@@ -46,6 +49,9 @@ void main() async {
   // Register dedicated descriptors first (these take priority)
   registry.register(CodexDescriptor.descriptor);
   registry.register(MiMoDescriptor.descriptor);
+  registry.register(MiniMaxDescriptor.descriptor);
+  registry.register(GrokDescriptor.descriptor);
+  registry.register(AntigravityDescriptor.descriptor);
   registry.register(ClaudeDescriptor.descriptor);
   registry.register(OpenAIDescriptor.descriptor);
   registry.register(WarpDescriptor.descriptor);
