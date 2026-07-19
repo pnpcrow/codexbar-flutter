@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../../auth/browser_cookie_resolver.dart';
 import '../../debug/debug_logger.dart';
 import '../../models/fetch_kind.dart';
 import '../../models/fetch_result.dart';
@@ -141,7 +142,16 @@ class MiniMaxWebFetchStrategy extends FetchStrategy {
 
     // If no manual cookie, try browser
     if (cookieHeader == null || cookieHeader.isEmpty) {
-      // TODO: Browser cookie extraction for MiniMax
+      DebugLogger.log('MiniMax', 'Trying browser cookie resolver...');
+      final resolver = BrowserCookieResolver();
+      final cookies = await resolver.resolve(UsageProvider.minimax);
+      cookieHeader = cookies?.cookieHeader;
+      if (cookies != null) {
+        DebugLogger.log('MiniMax', 'Got cookies from ${cookies.browser.displayName}');
+      }
+    }
+
+    if (cookieHeader == null || cookieHeader.isEmpty) {
       throw Exception('No MiniMax cookies found. Set MINIMAX_COOKIE or MINIMAX_API_TOKEN.');
     }
 

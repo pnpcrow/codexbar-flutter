@@ -74,7 +74,7 @@ class BrowserCookieResolver {
   static List<String> keyCookieNames(UsageProvider provider) {
     switch (provider) {
       case UsageProvider.mimo: return ['api-platform_serviceToken', 'serviceToken', 'userId'];
-      case UsageProvider.minimax: return ['_token'];
+      case UsageProvider.minimax: return ['_token', 'HERTZ-SESSION'];
       case UsageProvider.zai: return ['token'];
       case UsageProvider.claude: return ['sessionKey', '__cf_bm'];
       case UsageProvider.openai: return ['oai-sc', '__cf_bm', 'cf_clearance'];
@@ -84,7 +84,7 @@ class BrowserCookieResolver {
       case UsageProvider.mistral: return ['__cf_bm'];
       case UsageProvider.perplexity: return ['__cf_bm'];
       case UsageProvider.poe: return ['__cf_bm'];
-      case UsageProvider.grok: return ['__cf_bm'];
+      case UsageProvider.grok: return ['sso', 'sso-rw', 'cf_clearance', '__cf_bm', 'x-userid'];
       case UsageProvider.devin: return ['__cf_bm'];
       default: return ['__cf_bm', 'token', 'session'];
     }
