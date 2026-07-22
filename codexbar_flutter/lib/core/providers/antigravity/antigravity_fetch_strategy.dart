@@ -55,31 +55,32 @@ class AntigravityLocalFetchStrategy extends FetchStrategy {
     try {
       final result = await Process.run('pgrep', ['-f', 'agy']);
       if (result.exitCode == 0) {
+        // agy is running but no server found yet - it might be starting up
         return ProviderFetchResult(
           usage: UsageSnapshot(
             updatedAt: DateTime.now(),
             identity: const ProviderIdentitySnapshot(
               providerID: UsageProvider.antigravity,
-              loginMethod: 'detected (no API)',
+              loginMethod: 'agy running (no API yet)',
             ),
           ),
-          sourceLabel: 'local:detected',
+          sourceLabel: 'local:starting',
           strategyID: id,
           strategyKind: kind,
         );
       }
     } catch (_) {}
 
-    // No process found - return a clear message instead of throwing
+    // agy not running - return clear message
     return ProviderFetchResult(
       usage: UsageSnapshot(
         updatedAt: DateTime.now(),
         identity: const ProviderIdentitySnapshot(
           providerID: UsageProvider.antigravity,
-          loginMethod: 'Start agy to enable',
+          loginMethod: 'Run: agy -p "quota"',
         ),
       ),
-      sourceLabel: 'local:unavailable',
+      sourceLabel: 'local:not-running',
       strategyID: id,
       strategyKind: kind,
     );
