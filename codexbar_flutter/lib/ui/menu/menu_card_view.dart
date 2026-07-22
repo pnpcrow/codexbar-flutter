@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
@@ -19,10 +21,26 @@ class MenuCardView extends ConsumerStatefulWidget {
 }
 
 class _MenuCardViewState extends ConsumerState<MenuCardView> {
+  StreamSubscription<UsageProvider>? _storeSub;
+
+  @override
+  void dispose() {
+    _storeSub?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final storeAsync = ref.watch(usageStoreProvider);
     final enabledAsync = ref.watch(enabledProvidersProvider);
+
+    // Subscribe to store updates for reactive UI
+    storeAsync.whenData((store) {
+      _storeSub?.cancel();
+      _storeSub = store.onUpdate.listen((_) {
+        if (mounted) setState(() {});
+      });
+    });
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -368,18 +386,45 @@ class _ProviderCard extends StatelessWidget {
 
   Widget _buildUsageSection(BuildContext context) {
     final primary = snapshot!.primary!;
+    final secondary = snapshot!.secondary;
+    final tertiary = snapshot!.tertiary;
+
+    // Determine labels based on what windows are available
+    String? primaryLabel;
+    String? secondaryLabel;
+    String? tertiaryLabel;
+
+    if (tertiary != null) {
+      // Zai-style: tertiary=session, primary=weekly, secondary=time
+      tertiaryLabel = 'Session';
+      primaryLabel = 'Weekly';
+      if (secondary != null) secondaryLabel = 'Tool Usage';
+    } else if (secondary != null) {
+      primaryLabel = 'Session';
+      secondaryLabel = 'Weekly';
+    }
 
     return Column(
       children: [
+        // Tertiary (session/5-hour) if present
+        if (tertiary != null) ...[
+          UsageProgressBar(
+            usedPercent: tertiary.usedPercent,
+            label: tertiaryLabel,
+          ),
+          const SizedBox(height: 6),
+        ],
+        // Primary
         UsageProgressBar(
           usedPercent: primary.usedPercent,
-          label: snapshot!.secondary != null ? 'Session' : null,
+          label: primaryLabel,
         ),
-        if (snapshot!.secondary != null) ...[
+        // Secondary
+        if (secondary != null) ...[
           const SizedBox(height: 6),
           UsageProgressBar(
-            usedPercent: snapshot!.secondary!.usedPercent,
-            label: 'Weekly',
+            usedPercent: secondary.usedPercent,
+            label: secondaryLabel,
           ),
         ],
         if (primary.resetsAt != null) ...[

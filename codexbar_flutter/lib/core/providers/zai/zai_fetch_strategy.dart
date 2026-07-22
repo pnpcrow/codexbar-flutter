@@ -83,7 +83,8 @@ class ZaiAPIFetchStrategy extends FetchStrategy {
     final limits = data['limits'] as List<dynamic>? ?? [];
     final planName = _extractPlanName(data);
 
-    RateWindow? tokenLimit;
+    // Collect all TOKENS_LIMIT entries to split into primary/tertiary
+    final tokenLimits = <RateWindow>[];
     RateWindow? timeLimit;
 
     for (final limit in limits) {
@@ -106,16 +107,34 @@ class ZaiAPIFetchStrategy extends FetchStrategy {
       );
 
       if (type == 'TOKENS_LIMIT') {
-        tokenLimit = window;
+        tokenLimits.add(window);
       } else if (type == 'TIME_LIMIT') {
         timeLimit = window;
       }
     }
 
+    // Split TOKENS_LIMIT: longest → primary, shortest → tertiary (session)
+    tokenLimits.sort((a, b) =>
+        (a.windowMinutes ?? 0).compareTo(b.windowMinutes ?? 0));
+
+    RateWindow? primary;
+    RateWindow? secondary;
+    RateWindow? tertiary;
+
+    if (tokenLimits.length >= 2) {
+      tertiary = tokenLimits.first;   // shortest (e.g., 5-hour)
+      primary = tokenLimits.last;     // longest (e.g., weekly)
+    } else if (tokenLimits.length == 1) {
+      primary = tokenLimits.first;
+    }
+
+    secondary = timeLimit;
+
     return ProviderFetchResult(
       usage: UsageSnapshot(
-        primary: tokenLimit ?? timeLimit,
-        secondary: (tokenLimit != null && timeLimit != null) ? timeLimit : null,
+        primary: primary,
+        secondary: secondary,
+        tertiary: tertiary,
         updatedAt: DateTime.now(),
         identity: ProviderIdentitySnapshot(
           providerID: UsageProvider.zai,

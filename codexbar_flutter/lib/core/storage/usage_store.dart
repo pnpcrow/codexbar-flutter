@@ -122,10 +122,26 @@ class UsageStore {
     _lastFetchTimes[provider] = DateTime.now();
 
     try {
+      final env = Map<String, String>.from(Platform.environment);
+
+      // Inject saved API key from settings into env
+      final savedKey = _settings.providerAPIKey(provider);
+      if (savedKey != null && savedKey.isNotEmpty) {
+        _injectApiKey(env, provider, savedKey);
+        DebugLogger.log('UsageStore', '  Injected saved API key for ${provider.name}');
+      }
+
+      // Inject saved cookie from settings into env
+      final savedCookie = _settings.providerManualCookieHeader(provider);
+      if (savedCookie != null && savedCookie.isNotEmpty) {
+        env['${provider.name.toUpperCase()}_COOKIE'] = savedCookie;
+        DebugLogger.log('UsageStore', '  Injected saved cookie for ${provider.name}');
+      }
+
       final context = ProviderFetchContext(
         sourceMode: _resolveSourceMode(provider),
         includeCredits: true,
-        env: Map<String, String>.from(Platform.environment),
+        env: env,
       );
       DebugLogger.log('UsageStore', '  Source mode: ${context.sourceMode}');
 
@@ -166,6 +182,78 @@ class UsageStore {
     final mode = _settings.providerSourceMode(provider);
     if (mode == null) return ProviderSourceMode.auto;
     return ProviderSourceMode.values.byName(mode);
+  }
+
+  /// Inject API key into environment map with correct env var name.
+  void _injectApiKey(Map<String, String> env, UsageProvider provider, String key) {
+    switch (provider) {
+      case UsageProvider.zai:
+        env['Z_AI_API_KEY'] = key;
+        break;
+      case UsageProvider.minimax:
+        env['MINIMAX_API_TOKEN'] = key;
+        break;
+      case UsageProvider.claude:
+        env['ANTHROPIC_API_KEY'] = key;
+        break;
+      case UsageProvider.openai:
+        env['OPENAI_API_KEY'] = key;
+        break;
+      case UsageProvider.deepseek:
+        env['DEEPSEEK_API_KEY'] = key;
+        break;
+      case UsageProvider.moonshot:
+        env['MOONSHOT_API_KEY'] = key;
+        break;
+      case UsageProvider.kimi:
+        env['KIMI_AUTH_TOKEN'] = key;
+        break;
+      case UsageProvider.kimik2:
+        env['KIMI_K2_API_KEY'] = key;
+        break;
+      case UsageProvider.copilot:
+        env['COPILOT_API_TOKEN'] = key;
+        break;
+      case UsageProvider.openrouter:
+        env['OPENROUTER_API_KEY'] = key;
+        break;
+      case UsageProvider.elevenlabs:
+        env['ELEVENLABS_API_KEY'] = key;
+        break;
+      case UsageProvider.groq:
+        env['GROQ_API_KEY'] = key;
+        break;
+      case UsageProvider.warp:
+        env['WARP_API_KEY'] = key;
+        break;
+      case UsageProvider.venice:
+        env['VENICE_API_KEY'] = key;
+        break;
+      case UsageProvider.poe:
+        env['POE_API_KEY'] = key;
+        break;
+      case UsageProvider.stepfun:
+        env['STEPFUN_TOKEN'] = key;
+        break;
+      case UsageProvider.doubao:
+        env['DOUBAO_API_KEY'] = key;
+        break;
+      case UsageProvider.amp:
+        env['AMP_API_TOKEN'] = key;
+        break;
+      case UsageProvider.alibaba:
+        env['ALIBABA_API_TOKEN'] = key;
+        break;
+      case UsageProvider.deepgram:
+        env['DEEPGRAM_API_KEY'] = key;
+        break;
+      case UsageProvider.perplexity:
+        env['PERPLEXITY_SESSION_TOKEN'] = key;
+        break;
+      default:
+        env['${provider.name.toUpperCase()}_API_KEY'] = key;
+        env['${provider.name.toUpperCase()}_API_TOKEN'] = key;
+    }
   }
 
   /// Dispose resources.
