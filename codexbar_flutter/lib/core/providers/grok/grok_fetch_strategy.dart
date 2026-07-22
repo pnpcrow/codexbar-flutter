@@ -13,8 +13,55 @@ import '../../models/usage_provider.dart';
 import '../../models/usage_snapshot.dart';
 import '../fetch_strategy.dart';
 
-/// Grok web fetch strategy - uses browser cookies with gRPC-web protocol.
-/// Direct port of Swift GrokWebFetchStrategy.
+/// Grok credentials from ~/.grok/auth.json
+class GrokCredentials {
+  final String accessToken;
+  final String? refreshToken;
+  final String? email;
+  final String? userId;
+  final String? teamId;
+  final DateTime? expiresAt;
+
+  GrokCredentials({
+    required this.accessToken,
+    this.refreshToken,
+    this.email,
+    this.userId,
+    this.teamId,
+    this.expiresAt,
+  });
+
+  bool get isExpired {
+    if (expiresAt == null) return false;
+    return DateTime.now().isAfter(expiresAt!);
+  }
+
+  factory GrokCredentials.fromJson(Map<String, dynamic> json) {
+    // auth.json has a nested structure with the key as the domain
+    final entries = json.entries.firstWhere(
+      (e) => e.value is Map<String, dynamic>,
+      orElse: () => MapEntry('', {}),
+    );
+
+    if (entries.value is! Map<String, dynamic>) {
+      throw Exception('Invalid Grok auth.json format');
+    }
+
+    final data = entries.value as Map<String, dynamic>;
+    return GrokCredentials(
+      accessToken: data['key'] as String? ?? '',
+      refreshToken: data['refresh_token'] as String?,
+      email: data['email'] as String?,
+      userId: data['user_id'] as String?,
+      teamId: data['team_id'] as String?,
+      expiresAt: data['expires_at'] != null
+          ? DateTime.tryParse(data['expires_at'] as String)
+          : null,
+    );
+  }
+}
+
+/// Grok web fetch strategy - uses auth.json or browser cookies.
 class GrokWebFetchStrategy extends FetchStrategy {
   @override
   String get id => 'grok.web';
@@ -23,44 +70,68 @@ class GrokWebFetchStrategy extends FetchStrategy {
   ProviderFetchKind get kind => ProviderFetchKind.web;
 
   @override
-  Future<bool> isAvailable(ProviderFetchContext context) async => true;
+  Future<bool> isAvailable(ProviderFetchContext context) async {
+    // Check for auth.json
+    final home = Platform.environment['HOME'] ?? '';
+    final authFile = File('$home/.grok/auth.json');
+    if (authFile.existsSync()) return true;
+
+    // Check for browser cookies
+    final resolver = BrowserCookieResolver();
+    return await resolver.hasPlausibleSession(UsageProvider.grok);
+  }
 
   @override
   Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
-    final env = context.env.isEmpty ? Platform.environment : context.env;
-
-    // Try manual cookie
-    String? cookieHeader = env['GROK_COOKIE'];
-
-    // Try browser cookies
-    if (cookieHeader == null || cookieHeader.isEmpty) {
-      DebugLogger.log('Grok', 'Trying browser cookie resolver...');
-      final resolver = BrowserCookieResolver();
-      final cookies = await resolver.resolve(UsageProvider.grok);
-      cookieHeader = cookies?.cookieHeader;
-      if (cookies != null) {
-        DebugLogger.log('Grok', 'Got cookies from ${cookies.browser.displayName}');
-      }
+    // 1. Try auth.json credentials
+    final credentials = _loadCredentials();
+    if (credentials != null && !credentials.isExpired) {
+      DebugLogger.log('Grok', 'Using credentials from ~/.grok/auth.json');
+      return await _fetchWithCredentials(credentials);
     }
 
-    if (cookieHeader == null || cookieHeader.isEmpty) {
-      throw Exception('No Grok cookies found. Log in at grok.com');
+    // 2. Try browser cookies
+    final resolver = BrowserCookieResolver();
+    final cookies = await resolver.resolve(UsageProvider.grok);
+    if (cookies != null) {
+      DebugLogger.log('Grok', 'Using cookies from ${cookies.browser.displayName}');
+      return await _fetchWithCookies(cookies.cookieHeader);
     }
 
-    // Grok uses gRPC-web protocol
+    throw Exception('No Grok credentials found. Run `grok` to log in.');
+  }
+
+  @override
+  bool shouldFallback(Object error, ProviderFetchContext context) => false;
+
+  GrokCredentials? _loadCredentials() {
+    try {
+      final home = Platform.environment['HOME'] ?? '';
+      final authFile = File('$home/.grok/auth.json');
+      if (!authFile.existsSync()) return null;
+
+      final content = authFile.readAsStringSync();
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      return GrokCredentials.fromJson(json);
+    } catch (e) {
+      DebugLogger.error('Grok', 'Failed to load auth.json', e);
+      return null;
+    }
+  }
+
+  Future<ProviderFetchResult> _fetchWithCredentials(GrokCredentials credentials) async {
+    // Try gRPC-web endpoint with Bearer token
     final url = 'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig';
     final headers = {
-      'Cookie': cookieHeader,
-      'Origin': 'https://grok.com',
-      'Referer': 'https://grok.com/?_s=usage',
+      'Authorization': 'Bearer ${credentials.accessToken}',
       'Accept': '*/*',
       'Content-Type': 'application/grpc-web+proto',
       'x-grpc-web': '1',
       'x-user-agent': 'connect-es/2.1.1',
-      'User-Agent': 'CodexBar',
+      'Origin': 'https://grok.com',
+      'Referer': 'https://grok.com/?_s=usage',
     };
 
-    // gRPC-web requires POST with 5-byte empty frame
     final body = [0x00, 0x00, 0x00, 0x00, 0x00];
 
     DebugLogger.request('Grok', 'POST', url, headers: headers);
@@ -70,32 +141,83 @@ class GrokWebFetchStrategy extends FetchStrategy {
         headers: headers,
         body: body,
       );
-      DebugLogger.response('Grok', url, response.statusCode, response.bodyBytes.length.toString());
+      DebugLogger.response('Grok', url, response.statusCode, '${response.bodyBytes.length} bytes');
 
-      if (response.statusCode == 401 || response.statusCode == 403) {
-        throw Exception('Grok session expired. Log in at grok.com');
-      }
-      if (response.statusCode != 200) {
-        throw Exception('Grok API error: ${response.statusCode}');
-      }
-
-      // gRPC-web response is binary, try to parse
-      if (response.bodyBytes.length > 5) {
-        // Check for gRPC status in trailer
+      if (response.statusCode == 200 && response.bodyBytes.length > 5) {
         final bodyStr = utf8.decode(response.bodyBytes, allowMalformed: true);
-        DebugLogger.log('Grok', 'Response body (decoded): ${bodyStr.substring(0, bodyStr.length.clamp(0, 200))}');
-
-        // Check for grpc-status:0 (success)
         if (bodyStr.contains('grpc-status:0')) {
-          DebugLogger.log('Grok', 'gRPC status: success (grpc-status:0)');
-          // The response is protobuf-encoded, we can't easily parse it
-          // Return a success snapshot indicating connection works
+          DebugLogger.log('Grok', 'gRPC success');
+
+          return ProviderFetchResult(
+            usage: UsageSnapshot(
+              primary: null, // Can't parse protobuf yet
+              updatedAt: DateTime.now(),
+              identity: ProviderIdentitySnapshot(
+                providerID: UsageProvider.grok,
+                accountEmail: credentials.email,
+                accountOrganization: credentials.teamId,
+                loginMethod: credentials.email ?? 'oauth',
+              ),
+            ),
+            sourceLabel: 'oauth',
+            strategyID: id,
+            strategyKind: kind,
+          );
+        }
+      }
+    } catch (e) {
+      DebugLogger.error('Grok', 'gRPC request failed', e);
+    }
+
+    // Fallback: return identity-only snapshot
+    return ProviderFetchResult(
+      usage: UsageSnapshot(
+        updatedAt: DateTime.now(),
+        identity: ProviderIdentitySnapshot(
+          providerID: UsageProvider.grok,
+          accountEmail: credentials.email,
+          accountOrganization: credentials.teamId,
+          loginMethod: credentials.email ?? 'oauth',
+        ),
+      ),
+      sourceLabel: 'oauth:identity',
+      strategyID: id,
+      strategyKind: kind,
+    );
+  }
+
+  Future<ProviderFetchResult> _fetchWithCookies(String cookieHeader) async {
+    final url = 'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig';
+    final headers = {
+      'Cookie': cookieHeader,
+      'Accept': '*/*',
+      'Content-Type': 'application/grpc-web+proto',
+      'x-grpc-web': '1',
+      'Origin': 'https://grok.com',
+      'Referer': 'https://grok.com/?_s=usage',
+    };
+
+    final body = [0x00, 0x00, 0x00, 0x00, 0x00];
+
+    DebugLogger.request('Grok', 'POST', url, headers: headers);
+    try {
+      final response = await http.post(
+        Uri.parse(url),
+        headers: headers,
+        body: body,
+      );
+      DebugLogger.response('Grok', url, response.statusCode, '${response.bodyBytes.length} bytes');
+
+      if (response.statusCode == 200 && response.bodyBytes.length > 5) {
+        final bodyStr = utf8.decode(response.bodyBytes, allowMalformed: true);
+        if (bodyStr.contains('grpc-status:0')) {
+          DebugLogger.log('Grok', 'gRPC success via cookies');
           return ProviderFetchResult(
             usage: UsageSnapshot(
               updatedAt: DateTime.now(),
               identity: const ProviderIdentitySnapshot(
                 providerID: UsageProvider.grok,
-                loginMethod: 'connected (gRPC)',
+                loginMethod: 'cookie',
               ),
             ),
             sourceLabel: 'web:grpc',
@@ -103,68 +225,12 @@ class GrokWebFetchStrategy extends FetchStrategy {
             strategyKind: kind,
           );
         }
-
-        // Try to find JSON in the response
-        final jsonMatch = RegExp(r'\{.*\}').firstMatch(bodyStr);
-        if (jsonMatch != null) {
-          try {
-            final json = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
-            return _parseResponse(json);
-          } catch (_) {}
-        }
       }
-
-      // Return cookie snapshot if we can't parse the response
-      return ProviderFetchResult(
-        usage: UsageSnapshot(
-          updatedAt: DateTime.now(),
-          identity: const ProviderIdentitySnapshot(
-            providerID: UsageProvider.grok,
-            loginMethod: 'cookie',
-          ),
-        ),
-        sourceLabel: 'web:cookie',
-        strategyID: id,
-        strategyKind: kind,
-      );
     } catch (e) {
-      if (e is Exception && e.toString().contains('session expired')) rethrow;
-      DebugLogger.error('Grok', 'Request failed', e);
-      rethrow;
-    }
-  }
-
-  @override
-  bool shouldFallback(Object error, ProviderFetchContext context) => false;
-
-  ProviderFetchResult _parseResponse(Map<String, dynamic> json) {
-    double? creditsPercent;
-    String? planInfo;
-
-    final data = json['data'] ?? json;
-    if (data is Map) {
-      final credits = data['credits'] ?? data['billing'];
-      if (credits is Map) {
-        final used = (credits['used'] as num?)?.toDouble() ?? 0;
-        final total = (credits['total'] as num?)?.toDouble() ?? 1;
-        creditsPercent = (used / total * 100).clamp(0, 100);
-        planInfo = credits['plan'] as String?;
-      }
+      DebugLogger.error('Grok', 'gRPC cookie request failed', e);
     }
 
-    return ProviderFetchResult(
-      usage: UsageSnapshot(
-        primary: creditsPercent != null ? RateWindow(usedPercent: creditsPercent) : null,
-        updatedAt: DateTime.now(),
-        identity: ProviderIdentitySnapshot(
-          providerID: UsageProvider.grok,
-          loginMethod: planInfo ?? 'cookie',
-        ),
-      ),
-      sourceLabel: 'web',
-      strategyID: id,
-      strategyKind: kind,
-    );
+    throw Exception('Grok web fetch failed');
   }
 }
 
@@ -188,7 +254,9 @@ class GrokCLIFetchStrategy extends FetchStrategy {
 
   @override
   Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
-    throw Exception('Grok CLI fetch not yet implemented');
+    // Grok CLI doesn't have a direct usage command
+    // Fall back to web strategy
+    throw Exception('Grok CLI usage fetch not available. Use web instead.');
   }
 
   @override
