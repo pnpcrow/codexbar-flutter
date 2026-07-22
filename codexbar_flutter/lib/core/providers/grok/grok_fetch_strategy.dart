@@ -81,9 +81,28 @@ class GrokWebFetchStrategy extends FetchStrategy {
 
       // gRPC-web response is binary, try to parse
       if (response.bodyBytes.length > 5) {
-        // Try to extract text from gRPC response
+        // Check for gRPC status in trailer
         final bodyStr = utf8.decode(response.bodyBytes, allowMalformed: true);
         DebugLogger.log('Grok', 'Response body (decoded): ${bodyStr.substring(0, bodyStr.length.clamp(0, 200))}');
+
+        // Check for grpc-status:0 (success)
+        if (bodyStr.contains('grpc-status:0')) {
+          DebugLogger.log('Grok', 'gRPC status: success (grpc-status:0)');
+          // The response is protobuf-encoded, we can't easily parse it
+          // Return a success snapshot indicating connection works
+          return ProviderFetchResult(
+            usage: UsageSnapshot(
+              updatedAt: DateTime.now(),
+              identity: const ProviderIdentitySnapshot(
+                providerID: UsageProvider.grok,
+                loginMethod: 'connected (gRPC)',
+              ),
+            ),
+            sourceLabel: 'web:grpc',
+            strategyID: id,
+            strategyKind: kind,
+          );
+        }
 
         // Try to find JSON in the response
         final jsonMatch = RegExp(r'\{.*\}').firstMatch(bodyStr);
@@ -92,12 +111,6 @@ class GrokWebFetchStrategy extends FetchStrategy {
             final json = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
             return _parseResponse(json);
           } catch (_) {}
-        }
-
-        // Try to find numeric values for credits
-        final numbers = RegExp(r'\d+\.?\d*').allMatches(bodyStr);
-        if (numbers.isNotEmpty) {
-          DebugLogger.log('Grok', 'Found numbers in response');
         }
       }
 

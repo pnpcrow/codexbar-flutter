@@ -155,13 +155,23 @@ class MiniMaxWebFetchStrategy extends FetchStrategy {
       throw Exception('No MiniMax cookies found. Set MINIMAX_COOKIE or MINIMAX_API_TOKEN.');
     }
 
+    // Extract _token from cookies to use as Bearer token
+    String? authToken = bearerToken;
+    if (authToken == null || authToken.isEmpty) {
+      final tokenMatch = RegExp(r'_token=([^;]+)').firstMatch(cookieHeader);
+      if (tokenMatch != null) {
+        authToken = tokenMatch.group(1);
+        DebugLogger.log('MiniMax', 'Extracted _token from cookies as Bearer token');
+      }
+    }
+
     // Build headers
     final headers = <String, String>{
       'Cookie': cookieHeader,
       'Accept': 'application/json',
     };
-    if (bearerToken != null && bearerToken.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $bearerToken';
+    if (authToken != null && authToken.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $authToken';
     }
 
     // Try web endpoints
