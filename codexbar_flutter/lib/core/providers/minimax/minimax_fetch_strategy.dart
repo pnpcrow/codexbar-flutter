@@ -66,13 +66,13 @@ class MiniMaxWebFetchStrategy extends FetchStrategy {
     if (remainsResult != null) return remainsResult;
 
     // Return cookie snapshot if no data received
-    // (API needs MINIMAX_API_TOKEN, cookies alone insufficient)
+    // (API needs access token from browser localStorage)
     return ProviderFetchResult(
       usage: UsageSnapshot(
         updatedAt: DateTime.now(),
         identity: const ProviderIdentitySnapshot(
           providerID: UsageProvider.minimax,
-          loginMethod: 'Set MINIMAX_API_TOKEN for usage data',
+          loginMethod: 'F12 → Network → copy Authorization header',
         ),
       ),
       sourceLabel: 'web:cookie-only',
