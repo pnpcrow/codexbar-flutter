@@ -22,6 +22,28 @@ class MenuCardView extends ConsumerStatefulWidget {
 
 class _MenuCardViewState extends ConsumerState<MenuCardView> {
   StreamSubscription<UsageProvider>? _storeSub;
+  UsageStore? _store;
+
+  @override
+  void initState() {
+    super.initState();
+    // Schedule subscription setup after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) => _setupSubscription());
+  }
+
+  void _setupSubscription() {
+    final storeAsync = ref.read(usageStoreProvider);
+    storeAsync.whenData((store) {
+      if (_store == store) return; // Already subscribed
+      _store = store;
+      _storeSub?.cancel();
+      _storeSub = store.onUpdate.listen((_) {
+        if (mounted) setState(() {});
+      });
+      // Trigger initial rebuild with store data
+      if (mounted) setState(() {});
+    });
+  }
 
   @override
   void dispose() {
@@ -34,12 +56,11 @@ class _MenuCardViewState extends ConsumerState<MenuCardView> {
     final storeAsync = ref.watch(usageStoreProvider);
     final enabledAsync = ref.watch(enabledProvidersProvider);
 
-    // Subscribe to store updates for reactive UI
+    // Re-subscribe if store changes
     storeAsync.whenData((store) {
-      _storeSub?.cancel();
-      _storeSub = store.onUpdate.listen((_) {
-        if (mounted) setState(() {});
-      });
+      if (_store != store) {
+        _setupSubscription();
+      }
     });
 
     return Scaffold(
