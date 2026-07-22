@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -120,7 +121,6 @@ class GrokWebFetchStrategy extends FetchStrategy {
   }
 
   Future<ProviderFetchResult> _fetchWithCredentials(GrokCredentials credentials) async {
-    // Try gRPC-web endpoint with Bearer token
     final url = 'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig';
     final headers = {
       'Authorization': 'Bearer ${credentials.accessToken}',
@@ -146,11 +146,19 @@ class GrokWebFetchStrategy extends FetchStrategy {
       if (response.statusCode == 200 && response.bodyBytes.length > 5) {
         final bodyStr = utf8.decode(response.bodyBytes, allowMalformed: true);
         if (bodyStr.contains('grpc-status:0')) {
-          DebugLogger.log('Grok', 'gRPC success');
+          DebugLogger.log('Grok', 'gRPC success, parsing protobuf');
+
+          // Parse gRPC-web response for usage data
+          final parsed = _parseGRPCWebResponse(response.bodyBytes);
 
           return ProviderFetchResult(
             usage: UsageSnapshot(
-              primary: null, // Can't parse protobuf yet
+              primary: parsed.percent != null
+                  ? RateWindow(
+                      usedPercent: parsed.percent!,
+                      resetsAt: parsed.resetsAt,
+                    )
+                  : null,
               updatedAt: DateTime.now(),
               identity: ProviderIdentitySnapshot(
                 providerID: UsageProvider.grok,
@@ -184,6 +192,152 @@ class GrokWebFetchStrategy extends FetchStrategy {
       strategyID: id,
       strategyKind: kind,
     );
+  }
+
+  /// Parse gRPC-web response to extract usage percent and reset time.
+  /// Matches Swift GrokWebBillingFetcher.parseGRPCWebResponse logic.
+  ({double? percent, DateTime? resetsAt}) _parseGRPCWebResponse(List<int> data) {
+    // Extract gRPC-web data frames
+    final payloads = _grpcWebDataFrames(data);
+    if (payloads.isEmpty) return (percent: null, resetsAt: null);
+
+    // Scan for protobuf fields
+    final fixed32Fields = <({List<int> path, double value})>[];
+    final varintFields = <({List<int> path, int value})>[];
+
+    for (final payload in payloads) {
+      _scanProtobuf(payload, [], fixed32Fields, varintFields);
+    }
+
+    // Find usage percent: fixed32 fields with value 0-100
+    double? percent;
+    for (final field in fixed32Fields) {
+      if (field.path.isNotEmpty &&
+          field.path.last == 1 &&
+          field.value.isFinite &&
+          field.value >= 0 &&
+          field.value <= 100) {
+        if (percent == null || field.value < percent) {
+          percent = field.value;
+        }
+      }
+    }
+
+    // Find reset time: varint fields with Unix timestamp
+    DateTime? resetsAt;
+    final now = DateTime.now();
+    for (final field in varintFields) {
+      if (field.value >= 1700000000 && field.value <= 2100000000) {
+        final date = DateTime.fromMillisecondsSinceEpoch(field.value * 1000);
+        if (date.isAfter(now)) {
+          if (resetsAt == null || date.isBefore(resetsAt)) {
+            resetsAt = date;
+          }
+        }
+      }
+    }
+
+    return (percent: percent, resetsAt: resetsAt);
+  }
+
+  /// Extract gRPC-web data frames from response.
+  List<List<int>> _grpcWebDataFrames(List<int> data) {
+    final frames = <List<int>>[];
+    var offset = 0;
+
+    while (offset < data.length) {
+      if (offset + 5 > data.length) break;
+
+      // gRPC-web frame: 1 byte flags + 4 bytes length
+      final flags = data[offset];
+      final length = (data[offset + 1] << 24) |
+          (data[offset + 2] << 16) |
+          (data[offset + 3] << 8) |
+          data[offset + 4];
+
+      if (length > 0 && offset + 5 + length <= data.length) {
+        frames.add(data.sublist(offset + 5, offset + 5 + length));
+      }
+      offset += 5 + length;
+    }
+
+    // If no frames found, treat entire payload as one frame
+    if (frames.isEmpty && data.length > 5) {
+      frames.add(data.sublist(5));
+    }
+
+    return frames;
+  }
+
+  /// Simple protobuf scanner - extracts fixed32 and varint fields.
+  void _scanProtobuf(
+    List<int> data,
+    List<int> path,
+    List<({List<int> path, double value})> fixed32Fields,
+    List<({List<int> path, int value})> varintFields,
+  ) {
+    var offset = 0;
+    while (offset < data.length) {
+      // Read tag (varint)
+      final tagResult = _readVarint(data, offset);
+      if (tagResult == null) break;
+      offset = tagResult.offset;
+
+      final fieldNumber = tagResult.value >> 3;
+      final wireType = tagResult.value & 0x07;
+      final currentPath = [...path, fieldNumber];
+
+      switch (wireType) {
+        case 0: // Varint
+          final varResult = _readVarint(data, offset);
+          if (varResult == null) return;
+          offset = varResult.offset;
+          varintFields.add((path: currentPath, value: varResult.value));
+          break;
+        case 1: // 64-bit
+          if (offset + 8 > data.length) return;
+          offset += 8;
+          break;
+        case 2: // Length-delimited
+          final lenResult = _readVarint(data, offset);
+          if (lenResult == null) return;
+          offset = lenResult.offset;
+          final len = lenResult.value;
+          if (offset + len > data.length) return;
+          // Try to parse as sub-message
+          _scanProtobuf(data.sublist(offset, offset + len), currentPath, fixed32Fields, varintFields);
+          offset += len;
+          break;
+        case 5: // 32-bit (fixed32)
+          if (offset + 4 > data.length) return;
+          final bytes = data.sublist(offset, offset + 4);
+          final value = ByteData.sublistView(Uint8List.fromList(bytes)).getFloat32(0, Endian.little);
+          fixed32Fields.add((path: currentPath, value: value));
+          offset += 4;
+          break;
+        default:
+          return; // Unknown wire type
+      }
+    }
+  }
+
+  /// Read a varint from data at offset.
+  ({int value, int offset})? _readVarint(List<int> data, int offset) {
+    var result = 0;
+    var shift = 0;
+    var pos = offset;
+
+    while (pos < data.length) {
+      final byte = data[pos];
+      result |= (byte & 0x7F) << shift;
+      pos++;
+      if ((byte & 0x80) == 0) {
+        return (value: result, offset: pos);
+      }
+      shift += 7;
+      if (shift > 63) return null;
+    }
+    return null;
   }
 
   Future<ProviderFetchResult> _fetchWithCookies(String cookieHeader) async {
