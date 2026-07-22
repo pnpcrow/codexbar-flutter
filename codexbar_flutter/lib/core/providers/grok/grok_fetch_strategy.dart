@@ -85,10 +85,18 @@ class GrokWebFetchStrategy extends FetchStrategy {
   @override
   Future<ProviderFetchResult> fetch(ProviderFetchContext context) async {
     // 1. Try auth.json credentials
-    final credentials = _loadCredentials();
-    if (credentials != null && !credentials.isExpired) {
-      DebugLogger.log('Grok', 'Using credentials from ~/.grok/auth.json');
-      return await _fetchWithCredentials(credentials);
+    var credentials = _loadCredentials();
+    if (credentials != null) {
+      // Refresh if expired
+      if (credentials.isExpired && credentials.refreshToken != null) {
+        DebugLogger.log('Grok', 'Token expired, refreshing...');
+        credentials = await _refreshToken(credentials);
+      }
+
+      if (credentials != null && !credentials.isExpired) {
+        DebugLogger.log('Grok', 'Using credentials from ~/.grok/auth.json');
+        return await _fetchWithCredentials(credentials);
+      }
     }
 
     // 2. Try browser cookies
@@ -117,6 +125,101 @@ class GrokWebFetchStrategy extends FetchStrategy {
     } catch (e) {
       DebugLogger.error('Grok', 'Failed to load auth.json', e);
       return null;
+    }
+  }
+
+  /// Refresh expired token using OIDC refresh_token.
+  Future<GrokCredentials?> _refreshToken(GrokCredentials credentials) async {
+    if (credentials.refreshToken == null || credentials.refreshToken!.isEmpty) {
+      return null;
+    }
+
+    try {
+      // Use OIDC token endpoint to refresh
+      final response = await http.post(
+        Uri.parse('https://auth.x.ai/oauth/token'),
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {
+          'grant_type': 'refresh_token',
+          'refresh_token': credentials.refreshToken!,
+          'client_id': 'b1a00492-073a-47ea-816f-4c329264a828',
+        },
+      );
+
+      DebugLogger.log('Grok', 'Token refresh status: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final newAccessToken = json['access_token'] as String?;
+        final newRefreshToken = json['refresh_token'] as String?;
+        final expiresIn = json['expires_in'] as int?;
+
+        if (newAccessToken != null) {
+          final newExpiresAt = expiresIn != null
+              ? DateTime.now().add(Duration(seconds: expiresIn))
+              : null;
+
+          // Update auth.json
+          _saveCredentials(
+            accessToken: newAccessToken,
+            refreshToken: newRefreshToken ?? credentials.refreshToken,
+            expiresAt: newExpiresAt,
+            email: credentials.email,
+            userId: credentials.userId,
+            teamId: credentials.teamId,
+          );
+
+          DebugLogger.log('Grok', 'Token refreshed successfully');
+          return GrokCredentials(
+            accessToken: newAccessToken,
+            refreshToken: newRefreshToken ?? credentials.refreshToken,
+            email: credentials.email,
+            userId: credentials.userId,
+            teamId: credentials.teamId,
+            expiresAt: newExpiresAt,
+          );
+        }
+      }
+
+      DebugLogger.error('Grok', 'Token refresh failed: ${response.statusCode}');
+      return null;
+    } catch (e) {
+      DebugLogger.error('Grok', 'Token refresh error', e);
+      return null;
+    }
+  }
+
+  /// Save updated credentials to auth.json.
+  void _saveCredentials({
+    required String accessToken,
+    String? refreshToken,
+    DateTime? expiresAt,
+    String? email,
+    String? userId,
+    String? teamId,
+  }) {
+    try {
+      final home = Platform.environment['HOME'] ?? '';
+      final authFile = File('$home/.grok/auth.json');
+      if (!authFile.existsSync()) return;
+
+      final content = authFile.readAsStringSync();
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      final key = json.keys.firstWhere(
+        (k) => k.contains('auth.x.ai'),
+        orElse: () => '',
+      );
+      if (key.isEmpty) return;
+
+      final entry = json[key] as Map<String, dynamic>;
+      entry['key'] = accessToken;
+      if (refreshToken != null) entry['refresh_token'] = refreshToken;
+      if (expiresAt != null) entry['expires_at'] = expiresAt.toIso8601String();
+
+      authFile.writeAsStringSync(jsonEncode(json));
+      DebugLogger.log('Grok', 'Updated auth.json with new token');
+    } catch (e) {
+      DebugLogger.error('Grok', 'Failed to save auth.json', e);
     }
   }
 
