@@ -70,7 +70,19 @@ class AntigravityLocalFetchStrategy extends FetchStrategy {
       }
     } catch (_) {}
 
-    throw Exception('No Antigravity process found');
+    // No process found - return a clear message instead of throwing
+    return ProviderFetchResult(
+      usage: UsageSnapshot(
+        updatedAt: DateTime.now(),
+        identity: const ProviderIdentitySnapshot(
+          providerID: UsageProvider.antigravity,
+          loginMethod: 'Start agy to enable',
+        ),
+      ),
+      sourceLabel: 'local:unavailable',
+      strategyID: id,
+      strategyKind: kind,
+    );
   }
 
   @override

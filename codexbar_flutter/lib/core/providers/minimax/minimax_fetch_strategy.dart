@@ -65,7 +65,20 @@ class MiniMaxWebFetchStrategy extends FetchStrategy {
     final remainsResult = await _fetchRemains(cookieHeader, bearerToken, env);
     if (remainsResult != null) return remainsResult;
 
-    throw Exception('No MiniMax data received');
+    // Return cookie snapshot if no data received
+    // (API needs MINIMAX_API_TOKEN, cookies alone insufficient)
+    return ProviderFetchResult(
+      usage: UsageSnapshot(
+        updatedAt: DateTime.now(),
+        identity: const ProviderIdentitySnapshot(
+          providerID: UsageProvider.minimax,
+          loginMethod: 'Set MINIMAX_API_TOKEN for usage data',
+        ),
+      ),
+      sourceLabel: 'web:cookie-only',
+      strategyID: id,
+      strategyKind: kind,
+    );
   }
 
   @override
